@@ -1,0 +1,63 @@
+# Two-class motor imagery (left vs right hand), cue-based.
+#
+#   train:     bciflow train pipelines/motor_imagery.yaml --data calibration.bdf
+#   live:      bciflow run   pipelines/motor_imagery.yaml
+#   simulate:  bciflow run   pipelines/motor_imagery.yaml --replay session2.bdf
+#
+# Trigger codes 1 / 2 on the BioSemi trigger port (or a marker stream) mark the cues.
+name: Motor imagery (CSP + LDA)
+
+nodes:
+  src:
+    type: LSLSource
+    params: {signal_name: BioSemi, marker_name: BioSemi-Triggers}
+  eeg:
+    type: PickChannels
+    params: {types: [eeg]}
+  car:
+    type: Rereference
+    params: {ref: average}
+  down:
+    type: Decimate
+    params: {target_sfreq: 256}
+  notch:
+    type: NotchFilter
+    params: {freqs: [50]}
+  band:
+    type: BandpassFilter
+    params: {l_freq: 8, h_freq: 30, order: 4}
+  epochs:
+    type: Epocher
+    params: {events: {'1': left, '2': right}, tmin: 0.5, tmax: 2.5}
+  clf:
+    type: Classifier
+    params: {estimator: csp_lda, model_path: ../models/motor_imagery.joblib}
+  feedback:
+    type: PredictionOut
+    params: {name: bciflow-predictions}
+  log:
+    type: Logger
+
+edges:
+  - src.signal -> eeg.in
+  - eeg.out -> car.in
+  - car.out -> down.in
+  - down.out -> notch.in
+  - notch.out -> band.in
+  - band.out -> epochs.in
+  - src.markers -> epochs.markers
+  - epochs.out -> clf.in
+  - clf.out -> feedback.in
+  - clf.out -> log.in
+
+layout:  # node positions in the editor
+  src: [30, 30]
+  eeg: [280, 30]
+  car: [530, 30]
+  down: [30, 207]
+  notch: [280, 207]
+  band: [530, 207]
+  epochs: [30, 362]
+  clf: [280, 362]
+  feedback: [530, 362]
+  log: [530, 477]

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bciflow eyes</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232f6fde'/%3E%3Cpath d='M4 16q12-12 24 0q-12 12-24 0z' fill='white'/%3E%3Ccircle cx='16' cy='16' r='4' fill='%232f6fde'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+<style>
+  body.eyes-page { display: flex; flex-direction: column; height: 100vh; }
+  .eyes-page canvas { flex: 1; width: 100%; min-height: 0; }
+  .eyes-bar { display: flex; align-items: center; gap: 12px; padding: 6px 12px; font-size: 12px; color: var(--muted);
+              background: var(--panel); border-top: 1px solid var(--border); }
+  .eyes-bar label { display: flex; align-items: center; gap: 4px; }
+  .eyes-bar .live { color: var(--ok); }
+  body.clean .eyes-bar { display: none; }
+</style>
+</head>
+<body class="eyes-page">
+<canvas id="cv" title="Double-click: hide/show the bar (for the participant)"></canvas>
+<div class="eyes-bar">
+  <span id="status">waiting…</span>
+  <div class="spacer"></div>
+  <label><input type="checkbox" id="graded"> eyelids follow probability</label>
+  <label><input type="checkbox" id="showLabel" checked> show label</label>
+  <button id="fullscreen">Full screen</button>
+</div>
+<script src="scope.js"></script>
+<script src="eyes.js"></script>
+<script>
+"use strict";
+const q = new URLSearchParams(location.search);
+const stream = q.get("stream") || "bciflow-eyes";
+const closedLabel = q.get("closed") || "closed";
+const $ = (s) => document.querySelector(s);
+$("#graded").checked = q.get("graded") === "1";
+document.title = `${stream} · bciflow eyes`;
+const events = new EventBuffer([stream], 50);
+const anim = new EyesAnimator();
+
+async function poll() { await events.poll(); setTimeout(poll, 150); }
+function frame() {
+  const st = eyesStateFrom(events, closedLabel, $("#graded").checked);
+  anim.update(st.live ? st.closure : 0);
+  const label = !$("#showLabel").checked ? null
+    : !st.live ? "waiting for the pipeline…" : st.closure >= 0.5 ? "eyes closed" : "eyes open";
+  anim.draw($("#cv"), { dim: !st.live, label });
+  const s = $("#status");
+  s.textContent = st.live ? `● ${stream}: ${st.label}` + (st.pClosed != null ? ` · P(${closedLabel}) = ${st.pClosed.toFixed(2)}` : "")
+                          : `○ no predictions on '${stream}' — run the pipeline`;
+  s.className = st.live ? "live" : "";
+  requestAnimationFrame(frame);
+}
+$("#fullscreen").onclick = () => document.documentElement.requestFullscreen?.();
+$("#cv").ondblclick = () => document.body.classList.toggle("clean");
+poll(); requestAnimationFrame(frame);
+</script>
+</body>
+</html>

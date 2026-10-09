@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bciflow scope</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232f6fde'/%3E%3Cpath d='M4 17h5l3-8 4 15 3-11 2 4h7' stroke='white' stroke-width='2.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+<style>
+  body.scope-page { display: flex; flex-direction: column; height: 100vh; }
+  .scope-page .toolbar { flex-wrap: wrap; gap: 10px; }
+  .scope-page .toolbar label { display: flex; align-items: center; gap: 4px; font-size: 12px; }
+  .scope-main { flex: 1; display: flex; min-height: 0; }
+  .scope-main canvas { flex: 1; min-width: 0; background: var(--panel-2); }
+  .side { width: 230px; border-left: 1px solid var(--border); background: var(--panel); padding: 8px; overflow: auto; font-size: 12px; }
+  .side h3 { font-size: 12px; margin: 6px 0; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+  .side label { display: flex; gap: 6px; align-items: center; padding: 2px 0; }
+  .status { font-size: 12px; color: var(--muted); }
+  .status.live { color: var(--ok); }
+</style>
+</head>
+<body class="scope-page">
+<header class="toolbar">
+  <div class="brand" id="title">scope</div>
+  <label>Stream <select id="stream"></select></label>
+  <label>Display <select id="filter">
+    <option value="bandpass">1–40 Hz + notch</option><option value="highpass">high-pass 0.5 Hz</option><option value="none">raw</option>
+  </select></label>
+  <label>Plot <select id="mode"><option value="auto">auto</option><option value="stack">stacked</option><option value="overlay">overlaid</option></select></label>
+  <label>Scale <select id="scale"><option>auto</option><option>10</option><option>25</option><option selected>50</option><option>100</option><option>250</option><option>1000</option></select> µV</label>
+  <span id="specCtl" class="group" hidden>
+    <label>View <select id="specView"><option value="spectrum">spectrum</option><option value="spectrogram">spectrogram</option></select></label>
+    <label>Channel <select id="specChan"><option value="all">all + mean</option><option value="mean">mean</option></select></label>
+    <label>Average <select id="specAvg"><option value="1">1 frame</option><option value="4" selected>4 frames</option><option value="8">8 frames</option><option value="16">16 frames</option></select></label>
+    <label>Y <select id="specDb"><option value="db">dB</option><option value="lin">linear</option></select></label>
+  </span>
+  <label>Window <select id="win"><option>5</option><option>10</option><option selected>30</option><option>60</option></select> s</label>
+  <label>Channels <select id="page"></select></label>
+  <button id="pause">Pause</button>
+  <div class="spacer"></div>
+  <span class="status" id="status"></span>
+</header>
+<div class="scope-main">
+  <canvas id="cv"></canvas>
+  <aside class="side">
+    <h3>Event overlays</h3>
+    <div id="eventStreams"><p class="muted">Searching…</p></div>
+    <button id="refresh" style="margin-top:6px">Refresh streams</button>
+    <h3 style="margin-top:14px">Latest events</h3>
+    <ol class="event-list" id="eventList"></ol>
+  </aside>
+</div>
+<script src="scope.js"></script>
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const params = new URLSearchParams(location.search);
+let buf = null, paused = false, frozen = null, defaultsApplied = false;
+const events = new EventBuffer([]);
+const chosenEvents = new Set();
+
+function setStream(name) {
+  buf = new StreamBuffer(name, { filter: $("#filter").value, keep: 65 });
+  document.title = `${name} · bciflow scope`;
+  $("#title").textContent = name;
+  history.replaceState(null, "", `?stream=${encodeURIComponent(name)}`);
+  defaultsApplied = false;
+  listStreams();
+}
+
+async function listStreams() {
+  const r = await fetch("/api/streams?wait=1.0").then((r) => r.json()).catch(() => ({ streams: [] }));
+  const streams = r.streams || [];
+  const numeric = streams.filter((s) => s.format === "numeric");
+  const strings = streams.filter((s) => s.format === "string");
+  const sel = $("#stream");
+  const names = new Set(numeric.map((s) => s.name));
+  if (buf) names.add(buf.name);
+  sel.replaceChildren(...[...names].sort().map((n) => new Option(n, n)));
+  if (buf) sel.value = buf.name;
+  // default overlay: the stream's own '<name>-markers', else the amplifier triggers
+  if (buf && !defaultsApplied) {
+    const own = `${buf.name}-markers`;
+    if (strings.some((s) => s.name === own)) chosenEvents.add(own);
+    else if (strings.some((s) => s.name === "BioSemi-Triggers")) chosenEvents.add("BioSemi-Triggers");
+    defaultsApplied = true;
+  }
+  const host = $("#eventStreams");
+  host.replaceChildren();
+  const all = new Set([...strings.map((s) => s.name), ...chosenEvents]);
+  if (!all.size) host.innerHTML = '<p class="muted">No marker streams.</p>';
+  for (const name of [...all].sort()) {
+    const cb = Object.assign(document.createElement("input"), { type: "checkbox", checked: chosenEvents.has(name) });
+    cb.onchange = () => { cb.checked ? chosenEvents.add(name) : chosenEvents.delete(name); events.setNames([...chosenEvents]); };
+    const lab = document.createElement("label");
+    lab.append(cb, document.createTextNode(name + (strings.some((s) => s.name === name) ? "" : " (offline)")));
+    host.append(lab);
+  }
+  events.setNames([...chosenEvents]);
+}
+
+function updatePages() {
+  const n = buf.ch.length, per = 16, sel = $("#page");
+  const pages = Math.max(1, Math.ceil(n / per));
+  if (sel.options.length === pages && sel.dataset.sig === buf.ch.join()) return;
+  const keep = Number(sel.value || 0);
+  sel.replaceChildren(...Array.from({ length: pages }, (_, i) => new Option(`${buf.ch[i * per]}–${buf.ch[Math.min(n, (i + 1) * per) - 1]}`, i)));
+  sel.value = Math.min(keep, pages - 1);
+  sel.dataset.sig = buf.ch.join();
+}
+
+function renderEventList() {
+  const list = $("#eventList");
+  list.replaceChildren(...events.events.slice(-60).reverse().map((e) => {
+    const li = document.createElement("li");
+    li.title = e.stream;
+    li.innerHTML = `<span class="t">${e.t.toFixed(2)}</span><span></span>`;
+    li.lastChild.textContent = eventLabel(e.v);
+    return li;
+  }));
+}
+
+async function tick() {
+  if (buf && !paused) {
+    buf.setFilter($("#filter").value);
+    await buf.poll(Number($("#win").value) + 5);
+    if (buf.ch.length) updatePages();
+    // µV scale and display filter only apply to regularly sampled signals; spectra have their own controls
+    const known = buf.times.length > 0;
+    const spectrum = !!buf.spectrum;
+    const signal = buf.sfreq >= 20 && !spectrum;
+    for (const id of ["filter", "scale"]) $("#" + id).parentElement.hidden = known && !signal;
+    for (const id of ["mode", "page"]) $("#" + id).parentElement.hidden = known && spectrum;
+    $("#specCtl").hidden = !spectrum;
+    if (spectrum && $("#specChan").dataset.sig !== buf.spectrum.chans.join()) {
+      const keep = $("#specChan").value;
+      $("#specChan").replaceChildren(new Option("all + mean", "all"), new Option("mean", "mean"),
+        ...buf.spectrum.chans.map((c) => new Option(c, c)));
+      $("#specChan").value = [...$("#specChan").options].some((o) => o.value === keep) ? keep : "all";
+      $("#specChan").dataset.sig = buf.spectrum.chans.join();
+    }
+    const st = $("#status");
+    if (buf.missing) { st.textContent = "stream not found — is the pipeline running?"; st.className = "status"; }
+    else if (buf.staleness > 2) { st.textContent = `no new data for ${buf.staleness.toFixed(0)} s`; st.className = "status"; }
+    else if (buf.spectrum) {
+      const pk = spectrumPeak(buf, Number($("#specAvg").value));
+      st.textContent = `● live · spectrum · ${buf.spectrum.chans.length} ch × ${buf.spectrum.freqs.length} bins · ${pk == null ? "no peak" : "peak " + pk.toFixed(1) + " Hz"}`;
+      st.className = "status live";
+    }
+    else { st.textContent = `● live · ${buf.ch.length} ch · ${buf.sfreq ? buf.sfreq.toFixed(0) + " Hz shown" : "irregular rate"}`; st.className = "status live"; }
+  }
+  setTimeout(tick, 150);
+}
+
+async function tickEvents() {
+  if (!paused) { await events.poll(); renderEventList(); }
+  setTimeout(tickEvents, 400);
+}
+
+function frame() {
+  const view = paused && frozen ? frozen : buf;
+  drawStream($("#cv"), view, {
+    window: Number($("#win").value), mode: $("#mode").value, scale: $("#scale").value === "auto" ? "auto" : Number($("#scale").value),
+    page: Number($("#page").value || 0), perPage: 16, events: paused && frozen ? frozen.events : events.events,
+    view: $("#specView").value, channel: $("#specChan").value, avg: Number($("#specAvg").value), db: $("#specDb").value === "db",
+  });
+  requestAnimationFrame(frame);
+}
+
+$("#stream").onchange = () => setStream($("#stream").value);
+$("#refresh").onclick = listStreams;
+$("#pause").onclick = () => {
+  paused = !paused;
+  $("#pause").textContent = paused ? "Resume" : "Pause";
+  frozen = paused && buf ? Object.assign(Object.create(StreamBuffer.prototype), buf, {
+    times: buf.times.slice(), data: buf.data.slice(), events: events.events.slice() }) : null;
+};
+
+const initial = params.get("stream");
+if (initial) setStream(initial); else listStreams();
+tick(); tickEvents(); requestAnimationFrame(frame);
+</script>
+</body>
+</html>

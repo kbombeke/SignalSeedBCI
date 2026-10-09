@@ -1,0 +1,70 @@
+# Eyes open / closed from posterior alpha power, shown as animated eyes.
+# High relative alpha (as when the eyes are closed) -> "closed", low -> "open".
+# The threshold calibrates itself from the last 60 s; no training needed.
+# Trigger 1 = eyes closed / alpha burst, 2 = eyes open (as in the alpha-bursts data) is
+# used only to report how well the decisions match.
+#
+#   test data: bciflow synth --paradigm alpha-bursts --record data/alpha_bursts_raw.fif --duration 180
+name: Eyes open / closed (alpha)
+
+nodes:
+  src:
+    type: LSLSource
+    params: {signal_name: BioSemi, marker_name: BioSemi-Triggers}
+  names:
+    type: RenameChannels
+    params: {preset: biosemi32}
+  car:
+    type: Rereference
+    params: {ref: average}
+  posterior:
+    type: PickChannels
+    params: {include: [O1, Oz, O2, PO3, PO4, Pz]}
+  down:
+    type: Decimate
+    params: {target_sfreq: 256}
+  band:
+    type: BandpassFilter
+    params: {l_freq: 1, h_freq: 40}
+  windows:
+    type: SlidingWindow
+    params: {window_s: 1, step_s: 0.25}
+  alpha:
+    type: BandPower
+    params: {bands: {alpha: [8, 12]}, relative: true, log: false}
+  state:
+    type: ThresholdClassifier
+    params: {feature: mean, high_label: closed, low_label: open, truth: {'1': closed, '2': open}}
+  eyes:
+    type: EyesFeedback
+    params: {name: bciflow-eyes, closed_label: closed}
+  alphaplot:
+    type: LSLSignalOut
+    params: {name: bciflow-alpha, type: Feedback}
+
+edges:
+  - src.signal -> names.in
+  - names.out -> car.in
+  - car.out -> posterior.in
+  - posterior.out -> down.in
+  - down.out -> band.in
+  - band.out -> windows.in
+  - windows.out -> alpha.in
+  - alpha.out -> state.in
+  - src.markers -> state.markers
+  - state.out -> eyes.in
+  - alpha.out -> alphaplot.in
+  - src.markers -> alphaplot.markers
+
+layout:  # node positions in the editor
+  src: [30, 30]
+  names: [280, 30]
+  car: [530, 30]
+  posterior: [780, 30]
+  down: [1030, 30]
+  band: [30, 220]
+  windows: [280, 220]
+  alpha: [530, 220]
+  state: [780, 220]
+  eyes: [1030, 220]
+  alphaplot: [780, 400]

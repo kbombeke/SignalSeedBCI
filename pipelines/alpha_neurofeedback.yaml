@@ -1,0 +1,69 @@
+# Continuous relative alpha power over posterior channels, published as an LSL
+# stream ("bciflow-alpha") that a feedback program can read. No training needed.
+# Triggers are republished as "bciflow-alpha-markers" for the plots.
+#
+#   bciflow run pipelines/alpha_neurofeedback.yaml
+#   test data: bciflow synth --paradigm alpha-bursts --record data/alpha_bursts_raw.fif --duration 180
+name: Alpha neurofeedback
+
+nodes:
+  src:
+    type: LSLSource
+    params: {signal_name: BioSemi, marker_name: BioSemi-Triggers}
+  names:
+    type: RenameChannels
+    params: {preset: biosemi32}
+  car:
+    type: Rereference
+    params: {ref: average}
+  posterior:
+    type: PickChannels
+    params: {include: [O1, Oz, O2, PO3, PO4, Pz]}
+  down:
+    type: Decimate
+    params: {target_sfreq: 256}
+  band:
+    type: BandpassFilter
+    params: {l_freq: 1, h_freq: 40}
+  windows:
+    type: SlidingWindow
+    params: {window_s: 1, step_s: 0.25}
+  alpha:
+    type: BandPower
+    params: {bands: {alpha: [8, 12]}, relative: true, log: false}
+  out:
+    type: LSLSignalOut
+    params: {name: bciflow-alpha, type: Feedback}
+  spectrum:
+    type: SpectrumOut
+    params: {name: bciflow-spectrum, window_s: 2, step_s: 0.25, fmin: 1, fmax: 40}
+  log:
+    type: Logger
+    params: {every_s: 5}
+
+edges:
+  - src.signal -> names.in
+  - names.out -> car.in
+  - car.out -> posterior.in
+  - posterior.out -> down.in
+  - down.out -> band.in
+  - band.out -> windows.in
+  - windows.out -> alpha.in
+  - alpha.out -> out.in
+  - src.markers -> out.markers
+  - band.out -> spectrum.in
+  - src.markers -> spectrum.markers
+  - alpha.out -> log.in
+
+layout:  # node positions in the editor
+  src: [30, 30]
+  names: [280, 30]
+  car: [530, 30]
+  posterior: [780, 30]
+  down: [1030, 30]
+  band: [30, 207]
+  windows: [285, 215]
+  alpha: [535, 201]
+  out: [791, 185]
+  spectrum: [785, 412]
+  log: [1030, 207]

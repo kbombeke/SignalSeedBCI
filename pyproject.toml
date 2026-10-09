@@ -1,0 +1,33 @@
+[project]
+name = "bciflow"
+version = "0.1.0"
+description = "LSL-based BCI toolkit: BioSemi ActiveTwo bridge, replay/simulation, and a node-graph pipeline with MNE/SciPy processing"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "pylsl>=1.16.2",
+    "pyyaml>=6",
+    "mne>=1.6",
+    "scikit-learn>=1.3",
+    "joblib>=1.3",
+]
+
+[project.optional-dependencies]
+riemann = ["pyriemann>=0.6"]
+xdf = ["pyxdf>=1.16"]
+dev = ["pytest>=7", "pyriemann>=0.6", "pyxdf>=1.16"]
+
+[project.scripts]
+bciflow = "bciflow.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bciflow"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
