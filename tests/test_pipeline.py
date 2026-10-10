@@ -245,3 +245,61 @@ def test_eyes_pipeline_on_alpha_bursts(tmp_path):
     ctx = RunContext(mode="online", realtime=False)
     Graph.from_yaml(p, ctx, _source(rec)).run(verbose=False)
     assert ctx.store["accuracy"]["state"] > 0.85
+
+
+def test_inear_eog_polarity_and_balance():
+    from signalseedbci.sources.inear import CHANNELS, InEarEOG
+
+    gen = InEarEOG(seed=4, blink_rate_hz=0)
+    data, events = gen.next(int(200 * gen.sfreq))
+    codes = [c for _, c in events]
+    assert sorted(set(codes)) == [1, 2, 3, 4] and max(codes.count(c) for c in (1, 2, 3, 4)) - min(codes.count(c) for c in (1, 2, 3, 4)) <= 1
+    x = data - data[CHANNELS.index("Neck")]
+    sf = gen.sfreq
+
+    def shift(code, ch):
+        vals = [x[CHANNELS.index(ch), i + int(0.6 * sf):i + int(1.0 * sf)].mean() - x[CHANNELS.index(ch), i - int(0.3 * sf):i].mean()
+                for i, c in events if c == code]
+        return float(np.mean(vals))
+
+    # looking right: right ear positive, left ear negative; left: the reverse; up: forehead positive
+    assert shift(4, "RC1") > 8 and shift(4, "LC1") < -8
+    assert shift(3, "LC1") > 8 and shift(3, "RC1") < -8
+    assert shift(1, "Fpz") > 25 and shift(2, "Fpz") < -25
+    assert abs(shift(1, "LC1")) < 0.5 * abs(shift(3, "LC1"))  # vertical is weak in the ear
+
+
+def test_time_window_means():
+    from signalseedbci.pipeline.nodes.features import TimeWindowMeans
+    from signalseedbci.streams import Epoch, EpochsMeta
+
+    info = SignalInfo(["a", "b"], 100.0)
+    node = TimeWindowMeans("m", {"windows": [[0.0, 0.5], [0.5, 1.0]]})
+    meta = node.setup({"in": EpochsMeta(info, -0.2, 120)})["out"]
+    assert meta.names == ["a:0-0.5s", "b:0-0.5s", "a:0.5-1s", "b:0.5-1s"]
+    data = np.vstack([np.r_[np.zeros(20), np.ones(50), 3 * np.ones(50)], np.full(120, 2.0)])
+    f = node.process({"in": [Epoch(data, 1.0, "x")]})["out"][0]
+    np.testing.assert_allclose(f.values, [1.0, 2.0, 3.0, 2.0])
+    with pytest.raises(ValueError, match="outside the epoch"):
+        TimeWindowMeans("m", {"windows": [[0.5, 2.0]]}).setup({"in": EpochsMeta(info, -0.2, 120)})
+
+
+def test_inear_gaze_pipeline_train_and_evaluate(tmp_path):
+    from signalseedbci.sources.inear import InEarEOG
+
+    calib, test = tmp_path / "calib_raw.fif", tmp_path / "test_raw.fif"
+    InEarEOG(seed=11).make_raw(240).save(calib, verbose="error")
+    InEarEOG(seed=11).make_raw(400).crop(240, None).save(test, verbose="error")  # same "subject", later trials
+    spec = yaml.safe_load(open("pipelines/inear_gaze.yaml"))
+    spec["nodes"]["clf"]["params"]["model_path"] = str(tmp_path / "gaze.joblib")
+    for k in ("gaze", "eog"):
+        spec["nodes"][k]["params"]["name"] += f"-test-{tmp_path.name[-6:]}"
+    p = tmp_path / "gaze.yaml"
+    p.write_text(yaml.safe_dump(spec))
+    ctx = RunContext(mode="train", realtime=False)
+    Graph.from_yaml(p, ctx, _source(calib)).run(verbose=False)
+    meta = ctx.store["classifiers"]["clf"].fit()
+    assert sorted(meta["class_counts"]) == ["down", "left", "right", "up"] and meta["cv_accuracy"] > 0.8
+    ctx = RunContext(mode="online", realtime=False)
+    Graph.from_yaml(p, ctx, _source(test)).run(verbose=False)
+    assert ctx.store["accuracy"]["log"] > 0.8

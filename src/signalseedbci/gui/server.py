@@ -32,6 +32,7 @@ import numpy as np
 import yaml
 
 STATIC = Path(__file__).parent / "static"
+PARADIGMS = ("motor-imagery", "alpha-bursts", "eye-movements")
 RECORDING_SUFFIXES = {".bdf", ".edf", ".gdf", ".fif", ".xdf", ".vhdr", ".set", ".fif.gz"}
 SKIP_DIRS = {".venv", "venv", ".git", "__pycache__", "node_modules", ".pytest_cache"}
 
@@ -335,8 +336,8 @@ def dump_pipeline(spec: dict, previous_text: str = "") -> str:
     out.append("\nedges:")
     out += [f"  - {e}" for e in spec.get("edges") or []]
     if spec.get("layout"):
-        out.append("\nlayout:  # node positions in the editor")
-        out += [f"  {nid}: [{int(x)}, {int(y)}]" for nid, (x, y) in spec["layout"].items()]
+        out.append("\nlayout:  # node positions in the editor: [x, y] or [x, y, width, view height]")
+        out += [f"  {nid}: [" + ", ".join(str(int(v)) for v in pos) + "]" for nid, pos in spec["layout"].items()]
     return "\n".join(out) + "\n"
 
 
@@ -455,7 +456,7 @@ class App:
                 label = f"train {Path(pipe).stem}"
         elif kind == "synth":
             paradigm = o.get("paradigm", "motor-imagery")
-            if paradigm not in ("motor-imagery", "alpha-bursts"):
+            if paradigm not in PARADIGMS:
                 raise ValueError(f"Unknown paradigm {paradigm!r}")
             args = ["synth", "--preset", o.get("preset", "biosemi32"), "--sfreq", str(o.get("sfreq", 512)),
                     "--paradigm", paradigm]
@@ -514,7 +515,7 @@ class App:
                 src_args, src_label = ["replay", rec, "--loop", *names], f"replay {Path(rec).name}"
             elif source == "synthetic":
                 paradigm = o.get("paradigm", "motor-imagery")
-                if paradigm not in ("motor-imagery", "alpha-bursts"):
+                if paradigm not in PARADIGMS:
                     raise ValueError(f"Unknown paradigm {paradigm!r}")
                 src_args = ["synth", "--paradigm", paradigm, "--preset", "biosemi32", "--sfreq", "512", *names]
                 src_label = f"synthetic EEG ({paradigm})"

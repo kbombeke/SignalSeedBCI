@@ -37,9 +37,10 @@ nodes:
   spectrum:
     type: SpectrumOut
     params: {name: signalseedbci-spectrum, window_s: 2, step_s: 0.25, fmin: 1, fmax: 40}
-  log:
-    type: Logger
-    params: {every_s: 5}
+  eyes:
+    type: EyesFeedback
+  state:
+    type: ThresholdClassifier
 
 edges:
   - src.signal -> names.in
@@ -53,17 +54,19 @@ edges:
   - src.markers -> out.markers
   - band.out -> spectrum.in
   - src.markers -> spectrum.markers
-  - alpha.out -> log.in
+  - state.out -> eyes.in
+  - alpha.out -> state.in
 
-layout:  # node positions in the editor
-  src: [30, 30]
-  names: [280, 30]
-  car: [530, 30]
-  posterior: [780, 30]
-  down: [1030, 30]
+layout:  # node positions in the editor: [x, y] or [x, y, width, view height]
+  src: [23, -78]
+  names: [294, -98]
+  car: [522, -58]
+  posterior: [773, -50]
+  down: [1035, -58]
   band: [30, 207]
   windows: [285, 215]
   alpha: [535, 201]
-  out: [791, 185]
-  spectrum: [785, 412]
-  log: [1030, 207]
+  out: [802, 140, 384, 224]
+  spectrum: [800, 529, 388, 291]
+  eyes: [1270, 585, 499, 310]
+  state: [799, 985]

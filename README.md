@@ -37,10 +37,11 @@ so other tools (PsychoPy, LabRecorder, OpenViBE, Unity, …) can join in.
 6. [Recording with the BioSemi ActiveTwo](#recording-with-the-biosemi-activetwo)
 7. [Command line](#command-line)
 8. [Writing pipelines by hand](#writing-pipelines-by-hand)
-9. [Adding your own Python / MNE code](#adding-your-own-python--mne-code)
-10. [Troubleshooting](#troubleshooting)
-11. [Development](#development)
-12. [Status and known limitations](#status-and-known-limitations)
+9. [Node reference](#node-reference)
+10. [Adding your own Python / MNE code](#adding-your-own-python--mne-code)
+11. [Troubleshooting](#troubleshooting)
+12. [Development](#development)
+13. [Status and known limitations](#status-and-known-limitations)
 
 ---
 
@@ -90,7 +91,7 @@ source .venv/bin/activate
 
 # 5. check
 signalseedbci --version
-pytest -q            # optional: 48 tests, about 30 s
+pytest -q            # optional: 51 tests, about 30 s
 ```
 
 `.[dev]` also installs pyRiemann (Riemannian classifiers), pyxdf (reading XDF files)
@@ -178,6 +179,11 @@ Your own recordings appear automatically when you put them in the project, e.g. 
   fit are refused. Drag a connected input dot away to move or remove that connection.
 - Select a node to edit its settings on the right; ● marks values that differ from the
   default, and each setting has a short explanation.
+- **Resize** a node by dragging its bottom-right corner (it appears on hover). Nodes with a
+  live view grow in width and height, and once large enough the view switches from a
+  thumbnail to the full plot with axes, channel labels and legend. Other nodes change width
+  only. Neighbouring nodes move aside; double-click the corner to reset the size. Sizes are
+  saved with the pipeline.
 - Keys: Delete removes, ⌘D duplicates, ⌘Z / ⇧⌘Z undo / redo. Scroll to pan; pinch or
   ⌘-scroll to zoom; **Fit** and **Arrange** tidy the view.
 
@@ -187,8 +193,12 @@ Your own recordings appear automatically when you put them in the project, e.g. 
 - **SpectrumOut**: the live frequency spectrum with the peak frequency. Its window switches
   between spectrum and spectrogram.
 - **EyesFeedback**: animated eyes (closed / open), with a full-screen window for a participant.
+- **GazeFeedback**: animated eyes that look up / down / left / right as classified.
+- LSLSignalOut has a **display** setting (1–40 Hz, high-pass, or none) for its plots only;
+  use *none* for slow signals such as EOG.
 
-Click **⧉** on such a node (or double-click the plot) to open it in its own window.
+Click **⧉** on such a node (or double-click the plot) to open it in its own window, or
+enlarge the node itself by dragging its corner.
 
 **Bottom panel**
 
@@ -203,6 +213,7 @@ Click **⧉** on such a node (or double-click the plot) to open it in its own wi
 | `eyes_alpha.yaml` | Eyes close when posterior alpha is high and open when it is low (ThresholdClassifier, no training). Reports how often its decision matches trigger markers. | alpha-bursts data, or a real eyes-open/closed session |
 | `alpha_neurofeedback.yaml` | Relative alpha power as a live stream (`signalseedbci-alpha`) plus a live spectrum (`signalseedbci-spectrum`). | any EEG |
 | `motor_imagery.yaml` | Left- vs right-hand imagery with CSP + LDA; predictions on `signalseedbci-predictions`. | training first (below) |
+| `inear_gaze.yaml` | Gaze direction (up / down / left / right) from in-ear EOG: animated eyes look where the classifier says, plus a live EOG plot. | training first (below) |
 
 Motor imagery, trained and tested on synthetic data:
 
@@ -215,6 +226,34 @@ signalseedbci run pipelines/motor_imagery.yaml --offline data/test_raw.fif
 
 In the editor this is Data › *Replay a recording* › ＋ Create synthetic recording
 (motor imagery), then **Train…**, then **▶ Run**.
+
+### In-ear gaze direction
+
+The synthetic *eye-movements* data simulates a 16-channel in-ear montage: 12 in-ear
+electrodes (LC1-3 / RC1-3 on the concha, LE1-3 / RE1-3 in the ear canal of the left /
+right ear) and references M1 / M2 (mastoids), Fpz (forehead) and Neck. Cues 1-4 ask to
+look up / down / left / right; the eyes move ~0.25 s later and hold ~1.2 s. Eye movements
+follow the corneo-retinal dipole: looking right makes the right ear more positive and the
+left ear more negative; vertical movements mainly reach the forehead.
+
+The pipeline references everything to the neck, low-passes at 10 Hz, cuts an epoch around
+each cue and classifies the mean amplitude per electrode in two windows (**TimeWindowMeans**)
+with shrinkage LDA. **GazeFeedback** shows eyes that look in the predicted direction.
+
+```bash
+signalseedbci synth --paradigm eye-movements --duration 300 --seed 1 --record data/eye_movements_300s_raw.fif
+signalseedbci train pipelines/inear_gaze.yaml --data data/eye_movements_300s_raw.fif
+signalseedbci run pipelines/inear_gaze.yaml --offline data/eye_movements_session2_raw.fif
+```
+
+Results on synthetic data: ~98% cross-validated; 100% on a second session of the same
+simulated person, ~94% on a different simulated person. With **in-ear electrodes only**
+(drop Fpz, or Fpz and the mastoids, with a PickChannels node) left/right stays reliable
+but up/down gets confused (77% / 60%), because vertical eye movements barely reach the ear.
+
+In the editor: open `inear_gaze.yaml`, set Data to *Replay a recording* ›
+`data/eye_movements_session2_raw.fif` (or *Synthetic EEG* › *Eye movements*, which simulates
+a new person each time), press ▶ Run, and click ⧉ on the `gaze` node.
 
 ## Recording with the BioSemi ActiveTwo
 
@@ -265,7 +304,7 @@ All commands: `signalseedbci --help`; per command: `signalseedbci <command> --he
 | `signalseedbci run P.yaml --replay REC` | Run a pipeline over a recording at real-time pace (no LSL) |
 | `signalseedbci train P.yaml --data REC [REC…]` | Fit the Classifier nodes; prints CV accuracy |
 | `signalseedbci replay REC [--loop]` | Publish a recording as LSL streams (like an amplifier) |
-| `signalseedbci synth [--paradigm alpha-bursts] [--record FILE --duration S]` | Stream synthetic EEG, or write a synthetic recording |
+| `signalseedbci synth [--paradigm alpha-bursts\|eye-movements] [--record FILE --duration S]` | Stream synthetic EEG, or write a synthetic recording |
 | `signalseedbci bridge biosemi [--fake]` | BioSemi ActiveTwo (USB) → LSL; `--fake` simulates the amplifier |
 | `signalseedbci bridge actiview --tcp-channels N --sfreq F` | ActiView TCP server → LSL |
 | `signalseedbci discover [--check]` | List LSL streams on the network (with clock offsets and rates) |
@@ -296,22 +335,221 @@ edges:
   - epochs.out -> clf.in
 ```
 
-Paths in a pipeline are relative to the pipeline file. Available nodes (`signalseedbci nodes`
-shows all settings):
+Paths in a pipeline are relative to the pipeline file. All nodes and their settings are
+described in the [Node reference](#node-reference) below.
 
-| Category | Nodes |
+## Node reference
+
+Every node has **inputs** (left dots in the editor), **outputs** (right dots) and
+**settings** (the inspector on the right, or `params:` in YAML). Settings you leave out use
+the default. The editor shows the same descriptions; `signalseedbci nodes` lists them in
+the terminal.
+
+**Data kinds**: what flows along a connection, each with its own colour in the editor:
+
+| Kind | What it is |
 |---|---|
-| Sources | `LSLSource`, `LSLMarkerSource`, `FileSource` |
-| Preprocessing | `PickChannels`, `RenameChannels` (BioSemi A1… → 10-20), `Rereference`, `BandpassFilter`, `NotchFilter`, `Decimate` |
-| Epoching | `Epocher` (marker-locked), `SlidingWindow` (continuous) |
-| Features | `BandPower` |
-| Classification | `Classifier` (csp_lda, ts_lr, mdm, xdawn_ts_lr, lda, or your own), `ThresholdClassifier` |
-| Scripting | `SignalScript`, `EpochScript` |
-| Outputs | `LSLSignalOut`, `SpectrumOut`, `EyesFeedback`, `PredictionOut`, `Recorder`, `Logger` |
+| `signal` | Continuous multichannel data in µV, with channel names and sampling rate |
+| `markers` | Time-stamped events, e.g. trigger codes `1`, `2` or text markers |
+| `epochs` | Fixed-length pieces of signal cut around events (or sliding windows), each with a label |
+| `features` | A vector of numbers per epoch (e.g. band powers), with a label |
+| `predictions` | A classifier decision: label + probability per class |
 
-A trained model remembers the channels, sampling rate and epoch length it was trained on.
-If a pipeline feeds it something different, it refuses to run and explains why, rather
-than producing meaningless output.
+An input that accepts several kinds is written `epochs|features`. Inputs marked
+*optional* may stay unconnected.
+
+### Sources
+
+**LSLSource**: live data from Lab Streaming Layer (the BioSemi bridge, a replay, the
+synthetic generator, or any LSL program).
+- Outputs: `signal`, `markers`
+- `signal_name` (`BioSemi`): stream to connect to; empty = match by `signal_type` (`EEG`)
+- `marker_name` (`BioSemi-Triggers`): marker stream; empty = no markers. It may start before
+  or after the pipeline; the node keeps looking for it.
+- `timeout` (15 s): how long to wait for the signal stream before giving up
+
+**LSLMarkerSource**: an additional marker stream, e.g. software markers from PsychoPy.
+- Output: `markers` (connect it to the same `markers` input as other marker sources; marker
+  inputs accept several connections)
+- `name`, or `type` (`Markers`) if no name is given
+
+**FileSource**: plays a recording through the pipeline, at real-time pace (simulation) or
+as fast as possible (training / evaluation). The editor's Data picker and `--offline`
+swap it in automatically; you rarely add it by hand.
+- Outputs: `signal`, `markers`
+- `path` (required): BDF/EDF/GDF/FIF/BrainVision/EEGLAB/XDF file
+- `stim_channel` (`auto` = `Status` or the first trigger channel), `event_mask` (255): which
+  trigger bits count. BioSemi files often need 255 (8-bit triggers).
+
+### Preprocessing
+
+All filters are **causal** (they use only past samples) and keep their state between
+chunks, so offline training and live use give identical results.
+
+**PickChannels**: keep a subset of channels.
+- `include` / `exclude`: names or regular expressions, e.g. `[O1, Oz, O2]` or `["EX.*"]`
+- `types`: e.g. `[eeg]` to drop auxiliary channels
+
+**RenameChannels**: rename channels, e.g. BioSemi `A1…B32` to 10-20 names.
+- `preset`: `biosemi16/32/64/128/160/256` (MNE's BioSemi cap order; check your cap's layout)
+- `mapping`: explicit `{old: new}` names, applied after the preset
+
+**Rereference**: change the reference. BioSemi records reference-free, so always use it.
+- `ref`: `average` (common average of the EEG channels) or a list, e.g. `[EX1, EX2]`
+  (linked mastoids) or `[Neck]`
+- `drop_ref` (false): remove the reference channels from the output
+
+**BandpassFilter**: Butterworth band-pass, high-pass or low-pass (designed with MNE).
+- `l_freq` (1 Hz) / `h_freq` (40 Hz): leave one empty (`null`) for a pure low-pass or high-pass
+- `order` (4)
+
+**NotchFilter**: removes mains interference.
+- `freqs` (`[50]`): e.g. `[50, 100]`, or `[60]` in the Americas; `quality` (30) sets the width
+
+**Decimate**: lowers the sampling rate after an anti-alias filter.
+- `target_sfreq` (256 Hz): the input rate must be an integer multiple. The same pipeline then
+  works for 2048 Hz live BioSemi data and 512 Hz synthetic data.
+
+### Epoching
+
+**Epocher**: cuts an epoch around each selected marker (cue-based paradigms, ERPs).
+- Inputs: `in` (signal), `markers`
+- `events`: marker → class label, e.g. `{'1': left, '2': right}`; only these markers make
+  epochs. Empty = every marker, labelled with its value.
+- `tmin` / `tmax` (0.5 / 2.5 s): epoch start and end relative to the marker
+- `baseline`: `[start, end]` in s whose mean is subtracted per channel, e.g. `[-0.3, 0]`
+- `buffer_s` (30 s): how much signal it keeps for markers that arrive late (e.g. over the network)
+
+**SlidingWindow**: overlapping windows for continuous decoding (no markers needed).
+- `window_s` (1 s), `step_s` (0.1 s): e.g. 1 s windows every 0.25 s for neurofeedback
+
+### Features
+
+**BandPower**: power per channel in frequency bands (Welch), per epoch.
+- `bands` (`{mu: [8, 12], beta: [13, 30]}`): band name → `[fmin, fmax]` Hz
+- `log` (true): log10 of the power; `relative` (false): divide by the total 1–40 Hz power
+  (makes the value independent of overall signal level, as in the alpha pipelines)
+- Feature names are `channel:band`, e.g. `Oz:alpha`.
+
+**TimeWindowMeans**: mean amplitude per channel in one or more time windows of
+each epoch. These are classic features for ERPs and for eye movements (EOG), where the
+signal shifts and stays shifted while the gaze is held.
+- Input: `epochs`; output: `features`
+- `windows` (`[[0.3, 0.7], [0.7, 1.1]]`): `[start, end]` in seconds **relative to the event**.
+  Every window must lie inside the epoch (`tmin`…`tmax` of the Epocher); otherwise the
+  node reports which window is outside.
+- Feature names are `channel:start-end s`, e.g. `LC1:0.3-0.7s`. With 15 channels and two
+  windows that gives 30 features.
+- Tip: combine with an Epocher `baseline`, so each mean is the *change* from before the cue,
+  and with the `lda` estimator.
+
+### Classification
+
+**Classifier**: a trained machine-learning model (scikit-learn / pyRiemann / MNE).
+- Input: `epochs` or `features`; output: `predictions`
+- `estimator`:
+  - `csp_lda`: CSP + LDA, for motor imagery (epochs)
+  - `ts_lr` / `mdm`: Riemannian tangent space + logistic regression / minimum distance (epochs)
+  - `xdawn_ts_lr`: xDAWN + tangent space, for ERPs / P300 (epochs)
+  - `lda`: shrinkage LDA on feature vectors (BandPower, TimeWindowMeans)
+  - `file.py:function`: your own estimator
+- `model_path`: where **Train…** saves the model and Run loads it. The inspector shows whether
+  it is trained and its cross-validated accuracy (`cv_folds`, 5).
+- The model remembers the channels, sampling rate and epoch length it was trained on. If a
+  pipeline feeds it something different, it refuses to run and explains why, rather than
+  producing meaningless output.
+
+**ThresholdClassifier**: a two-state decision on one feature, **high vs low**
+(e.g. alpha high → `closed`, low → `open`). It needs no training.
+- Inputs: `in` (features), `markers` (optional, for the accuracy check); output: `predictions`
+- How it works, per update:
+  1. takes the feature (`feature`: `mean` of all, or a name / regular expression such as
+     `Oz:alpha`) and smooths it (`smooth_s`, 0.5 s);
+  2. sets the threshold: in `adaptive` mode halfway between the typical low (10th
+     percentile) and typical high (90th percentile) of the last `history_s` (60 s), so it
+     calibrates itself to each person; in `fixed` mode it uses `threshold`;
+  3. in adaptive mode, it waits until both levels have been seen: the spread must be at
+     least `min_contrast` (0.5) × the median, and at least `min_history_s` (8 s) of data must
+     be in. The console shows "calibrating" until then;
+  4. decides with **hysteresis**: it only switches when the value clearly crosses the
+     threshold, by a dead band of `hysteresis` (15%) of the high-low range, so it doesn't
+     flicker;
+  5. outputs the label (`high_label` / `low_label`) and a probability that grows smoothly
+     with the distance to the threshold.
+- `truth`: marker → true state, e.g. `{'1': closed, '2': open}`. The node then reports how
+  often its decision matches ("matches markers 92%"); this doesn't affect the decision.
+- Tips: the reaction time is about 1 s (analysis window + smoothing + hysteresis). Start a
+  session with an eyes-open and an eyes-closed block so it calibrates immediately. Use
+  `fixed` if one state is rare.
+
+### Scripting
+
+**SignalScript** / **EpochScript**: run your own Python function on every chunk of
+signal / every epoch. See [Adding your own Python / MNE code](#adding-your-own-python--mne-code).
+- `script` (required): the Python file; `params`: a dictionary passed to the script
+
+### Outputs
+
+Nodes marked ▣ show a **live view in their node box** while the pipeline runs. Click
+**⧉** (or double-click the view) to open it in its own window, or drag the node's corner to
+enlarge it.
+
+**LSLSignalOut** ▣: publishes a signal or feature vectors as an LSL stream for other
+programs, and plots it.
+- Inputs: `in` (signal or features), `markers` (optional: republished as `<name>-markers` and
+  drawn as event lines)
+- `name` (`signalseedbci-out`), `type` (`EEG`)
+- `display`: filter for the editor's plots only, the published data is unchanged:
+  `bandpass` (1–40 Hz + notch, default), `highpass` (0.5 Hz) or `none`. Use `none` for slow
+  signals such as EOG, which the 1–40 Hz view would hide.
+- The view shows stacked channels for signals and overlaid lines for features (e.g. relative
+  alpha per channel).
+
+**SpectrumOut** ▣: the real-time frequency spectrum (Welch power, µV²/Hz) of a signal,
+published as LSL (channels named `CHANNEL@FREQ`, e.g. `Oz@10`).
+- Inputs: `in` (signal), `markers` (optional, as above)
+- `window_s` (2 s) analysed every `step_s` (0.25 s), `resolution_hz` (1 Hz), `fmin` / `fmax`
+  (1–40 Hz)
+- `average_channels` (false): publish one averaged spectrum; needed for many channels (a
+  stream holds at most 8192 values per update)
+- The node shows the spectrum with the alpha band shaded and the peak frequency. Its window
+  switches between **spectrum** (all channels + mean or one channel, dB or linear, averaging
+  over frames, θ/α/β bands, peak marked) and a scrolling **spectrogram** with event lines.
+
+**EyesFeedback** ▣: animated eyes that are **closed** when the prediction is
+`closed_label` (default `closed`) and **open** otherwise. While open they blink now and then
+and glance around.
+- Input: `predictions` (e.g. from ThresholdClassifier); published again as LSL `name`
+  (`signalseedbci-eyes`)
+- `graded` (false): the eyelids follow the probability of `closed` instead of snapping
+  open / closed
+- The window is meant for a participant: **Full screen**, double-click hides the controls,
+  and the "eyes open / eyes closed" label can be switched off.
+
+**GazeFeedback** ▣: animated eyes that **look** in the predicted direction: up,
+down, left or right. They hold that for `hold_s` (1.5 s), then look ahead again until the
+next prediction. Looking down lowers the eyelids a little; looking up lifts the brows.
+- Input: `predictions` (e.g. from a Classifier trained on cues `up/down/left/right`);
+  published again as LSL `name` (`signalseedbci-gaze`)
+- `up_label`, `down_label`, `left_label`, `right_label`: which prediction labels mean
+  which direction, if your classes are named differently (e.g. `1`…`4`)
+- `graded` (false): the gaze follows the probabilities as a weighted direction, so an
+  uncertain decision looks only partway
+- The node status shows the direction and its probability, or "looking ahead · last: left"
+  between trials.
+
+**PredictionOut**: publishes predictions as an LSL marker stream (JSON
+`{"label": ..., "proba": {...}}`) for feedback programs such as PsychoPy or Unity.
+- `name` (`signalseedbci-predictions`)
+
+**Recorder**: saves the signal (and markers, if connected) to a `.fif` file when the
+pipeline stops.
+- `path` (`recording_raw.fif`). For whole sessions with all streams, LabRecorder (XDF) is
+  usually the better choice.
+
+**Logger**: prints what arrives in the Console. For predictions with a known true label
+(from the Epocher's `events`, or ThresholdClassifier's `truth`) it shows the running accuracy.
+- `every_s` (2 s): minimum time between summary lines for signal / feature input
 
 ## Adding your own Python / MNE code
 

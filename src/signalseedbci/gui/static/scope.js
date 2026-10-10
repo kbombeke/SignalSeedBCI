@@ -78,6 +78,7 @@ class EventBuffer {
     this.retryAt = {};
     this.events = [];
     this.keep = keep;
+    this.present = {};  // stream name -> currently found on the network
   }
 
   setNames(names) {
@@ -91,7 +92,8 @@ class EventBuffer {
       try {
         const r = await fetch(`/api/watch?name=${encodeURIComponent(name)}&since=${this.since[name] || 0}&window=120`);
         const j = await r.json();
-        if (!r.ok || j.missing) { this.retryAt[name] = performance.now() + 3000; continue; }
+        if (!r.ok || j.missing) { this.present[name] = false; this.retryAt[name] = performance.now() + 3000; continue; }
+        this.present[name] = true;
         if (j.kind !== "markers") continue;
         j.times.forEach((t, i) => this.events.push({ t, v: j.values[i], stream: name }));
         if (j.times.length) { this.since[name] = j.times[j.times.length - 1]; this.lastArrival = performance.now(); }
@@ -246,8 +248,8 @@ function fmtNum(v) {
   return v.toFixed(a >= 100 ? 0 : a >= 10 ? 1 : 2);
 }
 
-function openScopeWindow(stream) {
-  const url = `/scope.html?stream=${encodeURIComponent(stream)}`;
+function openScopeWindow(stream, filter = null) {
+  const url = `/scope.html?stream=${encodeURIComponent(stream)}` + (filter ? `&filter=${filter}` : "");
   window.open(url, `signalseedbci-scope-${stream}`, "width=1100,height=640");
 }
 

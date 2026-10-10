@@ -54,6 +54,9 @@ def test_dump_keeps_header_comments_and_roundtrips(project):
     again = yaml.safe_load(text)
     assert again["nodes"] == spec["nodes"] and again["edges"] == spec["edges"]
     assert list(again)[:3] == ["name", "nodes", "edges"]
+    # resized nodes store [x, y, width, view height]
+    spec["layout"]["clf"] = [10, 20, 480, 300]
+    assert yaml.safe_load(dump_pipeline(spec, old))["layout"]["clf"] == [10, 20, 480, 300]
 
 
 def test_validate_reports_structure_and_untrained_model(project):

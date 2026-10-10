@@ -25,6 +25,9 @@ class LSLSignalOut(Node):
     params = {
         "name": Param("signalseedbci-out", "str", "LSL stream name"),
         "type": Param("EEG", "str", "LSL stream type"),
+        "display": Param("bandpass", "choice", "Filter for the editor's plots only (published data is unchanged): "
+                         "1-40 Hz + notch, high-pass 0.5 Hz, or none (use for EOG / slow signals)",
+                         choices=["bandpass", "highpass", "none"]),
     }
 
     def setup(self, in_meta):
@@ -156,6 +159,23 @@ class EyesFeedback(PredictionOut):
         "name": Param("signalseedbci-eyes", "str", "LSL stream name for the predictions shown"),
         "closed_label": Param("closed", "str", "Prediction label that closes the eyes"),
         "graded": Param(False, "bool", "Eyelids follow the probability of 'closed' instead of the decision"),
+    }
+
+
+class GazeFeedback(PredictionOut):
+    """Animated eyes that look in the predicted direction (up / down / left / right),
+    hold it for ``hold_s`` and return to looking ahead. Shown live in the editor node;
+    ⧉ opens a full-size window. Predictions are published as LSL (JSON)."""
+
+    category = "outputs"
+    params = {
+        "name": Param("signalseedbci-gaze", "str", "LSL stream name for the predictions shown"),
+        "up_label": Param("up", "str", "Prediction label for looking up"),
+        "down_label": Param("down", "str", "Prediction label for looking down"),
+        "left_label": Param("left", "str", "Prediction label for looking left"),
+        "right_label": Param("right", "str", "Prediction label for looking right"),
+        "hold_s": Param(1.5, "float", "Seconds the eyes keep looking before returning to the centre"),
+        "graded": Param(False, "bool", "Gaze follows the probabilities (weighted direction) instead of the decision"),
     }
 
 

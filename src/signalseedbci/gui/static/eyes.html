@@ -33,14 +33,21 @@
 const q = new URLSearchParams(location.search);
 const stream = q.get("stream") || "signalseedbci-eyes";
 const closedLabel = q.get("closed") || "closed";
+const gazeMode = q.get("mode") === "gaze";
+const [upL, downL, leftL, rightL] = (q.get("labels") || "up,down,left,right").split(",");
+const holdS = Number(q.get("hold") || 1.5);
+const gazeLabels = { up: upL, down: downL, left: leftL, right: rightL };
+const say = { [upL]: "looking up", [downL]: "looking down", [leftL]: "looking left", [rightL]: "looking right" };
 const $ = (s) => document.querySelector(s);
 $("#graded").checked = q.get("graded") === "1";
+if (gazeMode) $("#graded").parentElement.lastChild.textContent = " gaze follows probabilities";
 document.title = `${stream} · SignalSeedBCI eyes`;
 const events = new EventBuffer([stream], 50);
 const anim = new EyesAnimator();
 
 async function poll() { await events.poll(); setTimeout(poll, 150); }
 function frame() {
+  if (gazeMode) return frameGaze();
   const st = eyesStateFrom(events, closedLabel, $("#graded").checked);
   anim.update(st.live ? st.closure : 0);
   const label = !$("#showLabel").checked ? null
@@ -52,6 +59,21 @@ function frame() {
   s.className = st.live ? "live" : "";
   requestAnimationFrame(frame);
 }
+function frameGaze() {
+  const st = gazeStateFrom(events, stream, gazeLabels, holdS, $("#graded").checked);
+  anim.update(0);
+  anim.look(st.dir);
+  const label = !$("#showLabel").checked ? null
+    : !st.present ? "waiting for the pipeline…" : st.active ? (say[st.label] || st.label) : "looking ahead";
+  anim.draw($("#cv"), { dim: !st.present, label });
+  const s = $("#status");
+  s.textContent = !st.present ? `○ no predictions on '${stream}' — run the pipeline`
+    : st.label == null ? `● ${stream}: waiting for the first prediction`
+    : `● ${stream}: last ${st.label}` + (st.p != null ? ` (P = ${st.p.toFixed(2)})` : "") + ` · ${st.age.toFixed(1)} s ago`;
+  s.className = st.present ? "live" : "";
+  requestAnimationFrame(frame);
+}
+
 $("#fullscreen").onclick = () => document.documentElement.requestFullscreen?.();
 $("#cv").ondblclick = () => document.body.classList.toggle("clean");
 poll(); requestAnimationFrame(frame);

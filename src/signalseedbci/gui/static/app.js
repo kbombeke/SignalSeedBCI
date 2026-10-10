@@ -93,15 +93,22 @@ const catColor = (cat) => `var(--c-${cat}, var(--c-misc))`;
 const kindColor = (kind) => `var(--k-${kind.split("|")[0]})`;
 
 // nodes with a live view in their box: a stream plot, or the eyes animation
-const NODE_VIEWS = { LSLSignalOut: "scope", SpectrumOut: "scope", EyesFeedback: "eyes" };
+const NODE_VIEWS = { LSLSignalOut: "scope", SpectrumOut: "scope", EyesFeedback: "eyes", GazeFeedback: "gaze" };
 const SCOPE_NODES = new Set(Object.keys(NODE_VIEWS));
 const paramOf = (n, k) => n.params[k] ?? schemaOf(n.type).params[k]?.default;
+const gazeParams = (n) => ({ up: paramOf(n, "up_label"), down: paramOf(n, "down_label"),
+  left: paramOf(n, "left_label"), right: paramOf(n, "right_label"), hold: paramOf(n, "hold_s") });
 function openNodeView(n) {
   if (NODE_VIEWS[n.type] === "eyes") openEyesWindow(miniStreamName(n), paramOf(n, "closed_label"), !!paramOf(n, "graded"));
-  else openScopeWindow(miniStreamName(n));
+  else if (NODE_VIEWS[n.type] === "gaze") openEyesWindow(miniStreamName(n), "closed", !!paramOf(n, "graded"), gazeParams(n));
+  else openScopeWindow(miniStreamName(n), n.type === "LSLSignalOut" ? paramOf(n, "display") : null);
 }
-const nodeExtra = (type) => (SCOPE_NODES.has(type) ? 118 : 0);
-const nodeH = (n) => HEAD_H + ROW_H * nodeRows(schemaOf(n.type)) + nodeExtra(n.type);
+// nodes can be resized: n.w (width) for all nodes, n.vh (height of the live view) for view nodes
+const VIEW_H = 86, VIEW_PAD = 32, MIN_W = NODE_W, MAX_W = 1600, MIN_VH = 60, MAX_VH = 1200;
+const nodeW = (n) => n.w || NODE_W;
+const viewH = (n) => n.vh || VIEW_H;
+const nodeExtra = (type, n) => (SCOPE_NODES.has(type) ? (n ? viewH(n) : VIEW_H) + VIEW_PAD : 0);
+const nodeH = (n) => HEAD_H + ROW_H * nodeRows(schemaOf(n.type)) + nodeExtra(n.type, n);
 
 function nodeRows(schema) {
   return Math.max(Object.keys(schema.inputs).length, Object.keys(schema.outputs).length, 1);
@@ -110,7 +117,7 @@ function portPos(node, port, dir) {
   const sc = schemaOf(node.type);
   const names = Object.keys(dir === "in" ? sc.inputs : sc.outputs);
   const i = Math.max(0, names.indexOf(port));
-  return { x: node.x + (dir === "in" ? 0 : NODE_W), y: node.y + HEAD_H + ROW_H * i + ROW_H / 2 };
+  return { x: node.x + (dir === "in" ? 0 : nodeW(node)), y: node.y + HEAD_H + ROW_H * i + ROW_H / 2 };
 }
 
 function uniqueId(base) {
@@ -122,7 +129,7 @@ const DEFAULT_IDS = {
   LSLSource: "src", FileSource: "src", LSLMarkerSource: "markers", BandpassFilter: "band", NotchFilter: "notch",
   Rereference: "ref", PickChannels: "pick", RenameChannels: "names", Decimate: "down", Epocher: "epochs",
   SlidingWindow: "windows", BandPower: "power", Classifier: "clf", PredictionOut: "feedback", Logger: "log", SpectrumOut: "spectrum",
-  ThresholdClassifier: "state", EyesFeedback: "eyes",
+  ThresholdClassifier: "state", EyesFeedback: "eyes", GazeFeedback: "gaze", TimeWindowMeans: "means",
   LSLSignalOut: "out", Recorder: "rec", SignalScript: "script", EpochScript: "script",
 };
 
@@ -144,6 +151,7 @@ function toSpec() {
   for (const n of S.nodes.values()) {
     nodes[n.id] = Object.keys(n.params).length ? { type: n.type, params: n.params } : { type: n.type };
     layout[n.id] = [Math.round(n.x), Math.round(n.y)];
+    if (n.w || n.vh) layout[n.id].push(Math.round(nodeW(n)), Math.round(SCOPE_NODES.has(n.type) ? viewH(n) : 0));
   }
   const spec = { name: S.name };
   if (S.description) spec.description = S.description;
@@ -170,8 +178,11 @@ function loadSpecState(spec) {
   const layout = spec.layout || {};
   for (const [id, ns] of Object.entries(spec.nodes || {})) {
     if (!schemaOf(ns.type)) { toast(`Unknown node type ${ns.type} (${id}) skipped`, true); continue; }
-    const [x, y] = layout[id] || [NaN, NaN];
-    S.nodes.set(id, { id, type: ns.type, params: { ...(ns.params || {}) }, x, y });
+    const [x, y, w, vh] = layout[id] || [NaN, NaN];
+    const node = { id, type: ns.type, params: { ...(ns.params || {}) }, x, y };
+    if (w && w > NODE_W) node.w = Math.min(MAX_W, w);
+    if (vh && SCOPE_NODES.has(ns.type) && vh !== VIEW_H) node.vh = Math.max(MIN_VH, Math.min(MAX_VH, vh));
+    S.nodes.set(id, node);
   }
   for (const text of spec.edges || []) {
     const m = /^\s*(\w+)\.(\w+)\s*->\s*(\w+)\.(\w+)\s*$/.exec(text);
@@ -207,11 +218,17 @@ function autoLayout(onlyMissing = false) {
     const prev = [...cols].filter(([d]) => Math.floor(d / perBand) === b - 1).map(([, c]) => colHeight(c));
     bandTop.push(bandTop[b - 1] + Math.max(...prev, 100) + 40);
   }
+  const colW = new Map([...cols].map(([d, col]) => [d, Math.max(...col.map((id) => nodeW(S.nodes.get(id))))]));
+  const colX = (d) => {
+    let x = 30;
+    for (let k = d - (d % perBand); k < d; k++) x += (colW.get(k) || NODE_W) + 54;
+    return x;
+  };
   for (const [d, col] of cols) {
     let y = bandTop[Math.floor(d / perBand)];
     for (const id of col) {
       const n = S.nodes.get(id);
-      if (!onlyMissing || isNaN(n.x)) { n.x = 30 + (d % perBand) * 250; n.y = y; }
+      if (!onlyMissing || isNaN(n.x)) { n.x = colX(d); n.y = y; }
       y += nodeH(n) + 60;
     }
   }
@@ -270,7 +287,7 @@ function renderNodes() {
     const sel = S.selected?.kind === "node" && S.selected.id === n.id;
     const div = el("div", {
       class: "node" + (sel ? " selected" : "") + (nodeHasError(n.id) ? " error" : ""),
-      style: `left:${n.x}px;top:${n.y}px;--cat:${catColor(sc.category)}`, "data-id": n.id,
+      style: `left:${n.x}px;top:${n.y}px;width:${nodeW(n)}px;--cat:${catColor(sc.category)}`, "data-id": n.id,
     });
     const head = el("div", { class: "node-head", title: sc.description },
       el("span", { class: "nid" }, n.id), el("span", { class: "ntype" }, n.type));
@@ -312,10 +329,15 @@ function renderNodes() {
     div.append(ports, el("div", { class: "node-summary" }, paramSummary(n)));
     if (SCOPE_NODES.has(n.type)) {
       const plot = el("div", { class: "node-scope", title: "Live view of the stream this node publishes — double-click to open in a window" },
-        el("canvas", { class: "mini" }), el("div", { class: "mini-status" }, ""));
-      plot.addEventListener("dblclick", () => openNodeView(n));
+        el("canvas", { class: "mini", style: `height:${viewH(n)}px` }), el("div", { class: "mini-status" }, ""));
       div.append(plot);
     }
+    const handle = el("div", {
+      class: "resize" + (SCOPE_NODES.has(n.type) ? "" : " width-only"),
+      title: SCOPE_NODES.has(n.type) ? "Drag to resize · double-click to reset" : "Drag to change the width · double-click to reset",
+    });
+    handle.addEventListener("mousedown", (ev) => startResize(ev, n));
+    div.append(handle);
     div.addEventListener("mousedown", (ev) => {
       if (ev.button !== 0) return;
       ev.stopPropagation();
@@ -412,6 +434,56 @@ function startNodeDrag(ev, n) {
   }, () => { if (moved) { S.dirty = true; $("#dirtyDot").hidden = false; commitHistory(); } });
 }
 
+function startResize(ev, n) {
+  if (ev.button !== 0) return;
+  ev.stopPropagation(); ev.preventDefault();
+  select({ kind: "node", id: n.id });
+  const start = toCanvas(ev), ow = nodeW(n), ovh = viewH(n);
+  const div = $(`.node[data-id="${CSS.escape(n.id)}"]`);
+  const canvas = div.querySelector("canvas.mini");
+  const view = SCOPE_NODES.has(n.type);
+  let moved = false;
+  document.body.classList.add(view ? "resizing" : "resizing-w");
+  drag((e) => {
+    const p = toCanvas(e);
+    n.w = Math.round(Math.max(MIN_W, Math.min(MAX_W, ow + p.x - start.x)));
+    div.style.width = n.w + "px";
+    if (view) {
+      n.vh = Math.round(Math.max(MIN_VH, Math.min(MAX_VH, ovh + p.y - start.y)));
+      canvas.style.height = n.vh + "px";
+    }
+    moved = true;
+    renderEdges();
+  }, () => {
+    document.body.classList.remove("resizing", "resizing-w");
+    if (!moved) return;
+    if (n.w === NODE_W) delete n.w;
+    if (n.vh === VIEW_H) delete n.vh;
+    if (makeRoom(n)) { renderNodes(); renderEdges(); }
+    S.dirty = true; $("#dirtyDot").hidden = false; commitHistory();
+  });
+}
+
+/** Move nodes that overlap `n` out of the way (right if beside it, down if below),
+ *  cascading to nodes those then hit. Returns true if anything moved. */
+function makeRoom(n) {
+  const gap = 30, queue = [n], movedAny = new Set();
+  for (let guard = 0; queue.length && guard < 400; guard++) {
+    const a = queue.shift(), A = nodeBox(a);
+    for (const m of S.nodes.values()) {
+      if (m === a || m === n) continue;
+      const B = nodeBox(m);
+      const overlap = A.x0 < B.x1 + 10 && A.x1 + 10 > B.x0 && A.y0 < B.y1 + 10 && A.y1 + 10 > B.y0;
+      if (!overlap) continue;
+      if (B.y0 < A.y0 + HEAD_H + 10 && B.x0 > A.x0) m.x = A.x1 + gap;   // beside: push right
+      else m.y = A.y1 + gap;                                           // below: push down
+      movedAny.add(m.id);
+      queue.push(m);
+    }
+  }
+  return movedAny.size > 0;
+}
+
 function tempPath() {
   const p = document.createElementNS(SVG, "path");
   p.setAttribute("class", "temp");
@@ -498,7 +570,7 @@ function createsCycle(src, dst) {
 }
 
 function nodeBox(n) {
-  return { x0: n.x, y0: n.y, x1: n.x + NODE_W, y1: n.y + nodeH(n) + 26 };
+  return { x0: n.x, y0: n.y, x1: n.x + nodeW(n), y1: n.y + nodeH(n) + 26 };
 }
 function overlaps(x, y, type, ignore) {
   const h = HEAD_H + ROW_H * nodeRows(schemaOf(type)) + nodeExtra(type) + 26;
@@ -514,7 +586,7 @@ function resolveOverlaps() {
   for (const n of [...S.nodes.values()].sort((a, b) => a.y - b.y || a.x - b.x)) {
     const h = nodeH(n) + 26;
     for (let guard = 0; guard < 200; guard++) {
-      const hit = placed.find((m) => n.x < m.x + NODE_W + 20 && n.x + NODE_W + 20 > m.x &&
+      const hit = placed.find((m) => n.x < m.x + nodeW(m) + 20 && n.x + nodeW(n) + 20 > m.x &&
                                       n.y < m.y + nodeH(m) + 26 + 16 && n.y + h + 16 > m.y);
       if (!hit) break;
       n.y = hit.y + nodeH(hit) + 26 + 20;
@@ -560,8 +632,8 @@ function autoConnect(from, to) {
 function ensureVisible(n) {
   const r = $("#canvasWrap").getBoundingClientRect();
   const sx = n.x * S.view.k + S.view.x, sy = n.y * S.view.k + S.view.y;
-  if (sx < 10 || sy < 10 || sx + NODE_W * S.view.k > r.width - 10 || sy + 80 * S.view.k > r.height - 10) {
-    S.view.x = r.width / 2 - (n.x + NODE_W / 2) * S.view.k;
+  if (sx < 10 || sy < 10 || sx + nodeW(n) * S.view.k > r.width - 10 || sy + 80 * S.view.k > r.height - 10) {
+    S.view.x = r.width / 2 - (n.x + nodeW(n) / 2) * S.view.k;
     S.view.y = r.height / 3 - n.y * S.view.k;
     applyView();
   }
@@ -583,7 +655,7 @@ function fitView() {
   const r = $("#canvasWrap").getBoundingClientRect();
   if (!ns.length || !r.width) { S.view = { x: 40, y: 30, k: 1 }; return applyView(); }
   const x0 = Math.min(...ns.map((n) => n.x)), y0 = Math.min(...ns.map((n) => n.y));
-  const x1 = Math.max(...ns.map((n) => n.x + NODE_W));
+  const x1 = Math.max(...ns.map((n) => n.x + nodeW(n)));
   const y1 = Math.max(...ns.map((n) => n.y + nodeH(n) + 30));
   const k = Math.min(1.2, Math.max(0.5, Math.min((r.width - 80) / (x1 - x0), (r.height - 80) / (y1 - y0))));
   S.view = { k, x: (r.width - (x1 - x0) * k) / 2 - x0 * k, y: (r.height - (y1 - y0) * k) / 2 - y0 * k };
@@ -626,6 +698,23 @@ function setupCanvas() {
       applyView();
     }
   }, { passive: false });
+  // Double-clicks on a node's resize handle (reset size) or live view (open window) are
+  // detected here from two quick presses: the first press selects the node and re-renders
+  // it, and browsers then drop the native dblclick because its target was replaced.
+  let lastPress = { t: 0, key: "" };
+  $("#nodes").addEventListener("mousedown", (ev) => {
+    if (ev.button !== 0) return;
+    const nodeEl = ev.target.closest(".node");
+    const zone = !nodeEl ? null : ev.target.closest(".resize") ? "resize" : ev.target.closest(".node-scope") ? "view" : null;
+    if (!zone) { lastPress = { t: 0, key: "" }; return; }
+    const key = `${nodeEl.dataset.id}:${zone}`, now = performance.now();
+    if (key !== lastPress.key || now - lastPress.t > 450) { lastPress = { t: now, key }; return; }
+    lastPress = { t: 0, key: "" };
+    ev.stopPropagation(); ev.preventDefault();  // capture phase: the node's own handlers don't run
+    const n = S.nodes.get(nodeEl.dataset.id);
+    if (zone === "resize") { delete n.w; delete n.vh; markDirty(); renderNodes(); renderEdges(); }
+    else openNodeView(n);
+  }, true);
   wrap.addEventListener("dragover", (ev) => ev.preventDefault());
   wrap.addEventListener("drop", (ev) => {
     ev.preventDefault();
@@ -652,7 +741,8 @@ function setupCanvas() {
 function duplicateNode(id) {
   const n = S.nodes.get(id);
   const nid = uniqueId(n.id);
-  S.nodes.set(nid, { id: nid, type: n.type, params: structuredClone(n.params), x: n.x + 30, y: n.y + 30 });
+  S.nodes.set(nid, { id: nid, type: n.type, params: structuredClone(n.params), x: n.x + 30, y: n.y + 30,
+                     ...(n.w ? { w: n.w } : {}), ...(n.vh ? { vh: n.vh } : {}) });
   markDirty();
   select({ kind: "node", id: nid });
 }
@@ -901,7 +991,8 @@ async function refreshFiles() {
 }
 
 // ------------------------------------------------------------------ data source (toolbar)
-const PARADIGMS = { "motor-imagery": "Motor imagery (cues 1/2)", "alpha-bursts": "Alpha bursts, 10 s every 20 s" };
+const PARADIGMS = { "motor-imagery": "Motor imagery (cues 1/2)", "alpha-bursts": "Alpha bursts, 10 s every 20 s",
+  "eye-movements": "Eye movements, in-ear (cues 1-4)" };
 const CREATE = "__create__";
 const needsFile = (src) => src === "replay" || src === "offline";
 
@@ -938,7 +1029,9 @@ async function createRecording() {
   paradigm.onchange = dur.oninput = suggest;
   suggest();
   const ok = await modal("Create synthetic recording", [
-    el("p", { class: "muted" }, "A labelled 32-channel recording (512 Hz) for training, replay and offline tests."),
+    el("p", { class: "muted" }, "A labelled recording (512 Hz) for training, replay and offline tests. Motor imagery and "
+      + "alpha bursts use a 32-electrode BioSemi cap; eye movements a 16-channel in-ear montage (12 in-ear electrodes, "
+      + "mastoids, forehead, neck)."),
     el("div", { class: "field" }, el("label", {}, "Contents"), paradigm),
     el("div", { class: "field" }, el("label", {}, "Duration (s)"), dur),
     el("div", { class: "field" }, el("label", {}, "Save as"), file),
@@ -1202,23 +1295,28 @@ function renderEvents() {
 
 // ------------------------------------------------------------------ plots inside LSLSignalOut nodes
 const MINI = new Map();  // stream name -> {buf, events}
+const displayFilter = new Map();  // stream name -> display filter of its LSLSignalOut node
 function miniStreamName(n) { return n.params.name ?? schemaOf(n.type).params.name.default; }
 const scopeNodes = () => [...S.nodes.values()].filter((n) => SCOPE_NODES.has(n.type));
 
 async function pollMiniScopes() {
   if (document.hidden) return;
   const wanted = new Map(scopeNodes().map((n) => [miniStreamName(n), n.type]));
+  displayFilter.clear();
+  for (const n of scopeNodes()) if (n.type === "LSLSignalOut") displayFilter.set(miniStreamName(n), paramOf(n, "display"));
   for (const k of [...MINI.keys()]) if (!wanted.has(k)) MINI.delete(k);
   await Promise.all([...wanted].map(async ([name, type]) => {
-    if (NODE_VIEWS[type] === "eyes") {
+    if (NODE_VIEWS[type] === "eyes" || NODE_VIEWS[type] === "gaze") {
       if (!MINI.has(name)) MINI.set(name, { eyes: new EventBuffer([name], 50), anim: new EyesAnimator() });
       return MINI.get(name).eyes.poll();
     }
     const spectrum = type === "SpectrumOut";  // the node plot only needs the latest spectra
+    const filter = displayFilter.get(name) || "bandpass";
     if (!MINI.has(name)) {
-      MINI.set(name, { buf: new StreamBuffer(name, { filter: "bandpass", keep: spectrum ? 3 : 35 }), events: new EventBuffer([`${name}-markers`]) });
+      MINI.set(name, { buf: new StreamBuffer(name, { filter, keep: spectrum ? 3 : 35 }), events: new EventBuffer([`${name}-markers`]) });
     }
     const m = MINI.get(name);
+    m.buf.setFilter(filter);
     await m.buf.poll(spectrum ? 2 : 32);
     if (!m.buf.missing) await m.events.poll();
   }));
@@ -1232,18 +1330,38 @@ function drawMiniScopes() {
     const m = MINI.get(miniStreamName(n));
     const status = node.querySelector(".mini-status");
     let text = "○ not streaming — Run the pipeline";
+    if (NODE_VIEWS[n.type] === "gaze") {
+      if (!m?.anim) continue;
+      const g = gazeParams(n);
+      const st = gazeStateFrom(m.eyes, miniStreamName(n), g, g.hold, !!paramOf(n, "graded"));
+      const say = { [g.up]: "looking up", [g.down]: "looking down", [g.left]: "looking left", [g.right]: "looking right" };
+      m.anim.update(0);
+      m.anim.look(st.dir);
+      const big = cv.clientWidth >= 320 && cv.clientHeight >= 180;
+      m.anim.draw(cv, { compact: !big, dim: !st.present, label: big && st.present ? (st.active ? say[st.label] : "looking ahead") : null });
+      text = !st.present ? "○ waiting for predictions — Run the pipeline"
+        : st.label == null ? "● connected · waiting for a cue"
+        : st.active ? `● ${say[st.label] || st.label}` + (st.p != null ? ` · P=${st.p.toFixed(2)}` : "")
+        : `● looking ahead · last: ${st.label}`;
+      if (status.textContent !== text) { status.textContent = text; status.classList.toggle("live", st.present); }
+      continue;
+    }
     if (NODE_VIEWS[n.type] === "eyes") {
       if (!m?.anim) continue;
       const closed = paramOf(n, "closed_label");
       const st = eyesStateFrom(m.eyes, closed, !!paramOf(n, "graded"));
       m.anim.update(st.live ? st.closure : 0);
-      m.anim.draw(cv, { compact: true, dim: !st.live });
+      const bigEyes = cv.clientWidth >= 320 && cv.clientHeight >= 180;
+      const eyesLabel = bigEyes && st.live ? (st.closure >= 0.5 ? "eyes closed" : "eyes open") : null;
+      m.anim.draw(cv, { compact: !bigEyes, dim: !st.live, label: eyesLabel });
       if (st.live) text = `● eyes ${st.closure >= 0.5 ? "closed" : "open"}` + (st.pClosed != null ? ` · P(${closed})=${st.pClosed.toFixed(2)}` : "");
       else text = "○ waiting for predictions — Run the pipeline";
       if (status.textContent !== text) { status.textContent = text; status.classList.toggle("live", st.live); }
       continue;
     }
-    drawStream(cv, m?.buf, { window: 30, compact: true, events: m?.events.events });
+    // enlarged nodes get the full plot (axes, labels, legend); small ones the thumbnail
+    const big = cv.clientWidth >= 300 && cv.clientHeight >= 150;
+    drawStream(cv, m?.buf, { window: 30, compact: !big, events: m?.events.events, perPage: 16 });
     if (m && !m.buf.missing && m.buf.times.length) {
       const last = m.buf.data[m.buf.data.length - 1];
       const live = m.buf.staleness < 3;

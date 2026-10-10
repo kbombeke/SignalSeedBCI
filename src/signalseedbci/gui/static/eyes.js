@@ -17,12 +17,19 @@ class EyesAnimator {
 
   update(closure) { this.target = Math.max(0, Math.min(1, closure)); }
 
+  /** Steer the gaze: (gx, gy) in -1..1 (+x = right, +y = up), or null to look around freely. */
+  look(dir) { this.directed = dir; }
+
   step() {
     const now = performance.now(), dt = Math.min(0.1, (now - this.last) / 1000);
     this.last = now;
     // eyelids: ~0.25 s to close or open
     this.lid += (this.target - this.lid) * (1 - Math.exp(-dt / 0.08));
-    if (now > this.nextGaze) {
+    if (this.directed) {
+      // far enough that the iris reaches the corner of the eye
+      this.gazeTarget = { x: this.directed[0] * 1.7, y: -this.directed[1] * 1.6 };
+      this.nextGaze = now + 600;
+    } else if (now > this.nextGaze) {
       this.gazeTarget = { x: (Math.random() - 0.5) * 1.2, y: (Math.random() - 0.5) * 0.6 };
       this.nextGaze = now + 900 + Math.random() * 2200;
     }
@@ -41,7 +48,9 @@ class EyesAnimator {
       this.blinkStart = -1;
       this.nextBlink = now + 1500 + Math.random() * 3000;
     }
-    return Math.max(this.lid, blink);
+    // looking down lowers the upper lids a little; looking up lifts the brows (in _eye)
+    const down = Math.max(0, this.gaze.y / 1.6);
+    return Math.max(this.lid, blink, 0.35 * down);
   }
 
   /** opts: dim (waiting, no data), compact (node box), label (text under the eyes) */
@@ -93,7 +102,7 @@ class EyesAnimator {
 
     // eyebrow: lifts slightly when open
     ctx.strokeStyle = ink; ctx.lineWidth = lw * 1.3; ctx.lineCap = "round";
-    const browY = top - eh * (0.45 - 0.15 * closure);
+    const browY = top - eh * (0.45 - 0.15 * closure + 0.18 * Math.max(0, -this.gaze.y / 1.6));
     ctx.beginPath();
     ctx.moveTo(cx - ew * 0.45, browY + eh * 0.12);
     ctx.quadraticCurveTo(cx + side * ew * 0.05, browY - eh * 0.3, cx + ew * 0.45, browY + eh * 0.12);
@@ -129,9 +138,9 @@ class EyesAnimator {
     // outline: the upper half fades as the lid covers it; the lower curve stays
     ctx.strokeStyle = ink; ctx.lineWidth = lw;
     const a0 = ctx.globalAlpha;
-    ctx.globalAlpha = a0 * Math.max(0, 1 - closure * 2.5);
-    ctx.beginPath(); ctx.moveTo(L, cy); ctx.quadraticCurveTo(cx, top, R, cy); ctx.stroke();
-    ctx.globalAlpha = a0;
+    if (closure <= 0.03) {  // once the lid moves, its edge is the visible upper outline
+      ctx.beginPath(); ctx.moveTo(L, cy); ctx.quadraticCurveTo(cx, top, R, cy); ctx.stroke();
+    }
     ctx.beginPath(); ctx.moveTo(L, cy); ctx.quadraticCurveTo(cx, bot, R, cy); ctx.stroke();
     if (closure > 0.03) {
       ctx.beginPath();
@@ -163,7 +172,30 @@ function eyesStateFrom(events, closedLabel = "closed", graded = false) {
   return { closure, label, pClosed, live };
 }
 
-function openEyesWindow(stream, closedLabel = "closed", graded = false) {
+/** Latest prediction -> gaze direction for GazeFeedback. labels: {up, down, left, right}. */
+function gazeStateFrom(events, stream, labels, holdS = 1.5, graded = false) {
+  const dirs = { [labels.up]: [0, 1], [labels.down]: [0, -1], [labels.left]: [-1, 0], [labels.right]: [1, 0] };
+  const present = !!events.present?.[stream];
+  const last = events.events[events.events.length - 1];
+  if (!last) return { dir: null, label: null, p: null, present, active: false, age: null };
+  let label = last.v, proba = {};
+  try { const j = JSON.parse(last.v); label = j.label; proba = j.proba || {}; } catch { /* plain marker */ }
+  const age = events.lastArrival ? (performance.now() - events.lastArrival) / 1000 : Infinity;
+  let dir = dirs[label] || null;
+  if (graded && Object.keys(proba).length) {
+    dir = [0, 0];
+    for (const [k, p] of Object.entries(proba)) if (dirs[k]) { dir[0] += p * dirs[k][0]; dir[1] += p * dirs[k][1]; }
+  }
+  const active = age < holdS && !!dir;
+  return { dir: active ? dir : null, label, p: proba[label] ?? null, present, active, age };
+}
+
+function openEyesWindow(stream, closedLabel = "closed", graded = false, gaze = null) {
   const q = new URLSearchParams({ stream, closed: closedLabel, graded: graded ? "1" : "0" });
+  if (gaze) {
+    q.set("mode", "gaze");
+    q.set("labels", [gaze.up, gaze.down, gaze.left, gaze.right].join(","));
+    q.set("hold", String(gaze.hold));
+  }
   window.open(`/eyes.html?${q}`, `signalseedbci-eyes-${stream}`, "width=900,height=520");
 }

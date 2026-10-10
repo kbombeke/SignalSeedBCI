@@ -64,7 +64,7 @@ function setStream(name) {
   buf = new StreamBuffer(name, { filter: $("#filter").value, keep: 65 });
   document.title = `${name} · SignalSeedBCI scope`;
   $("#title").textContent = name;
-  history.replaceState(null, "", `?stream=${encodeURIComponent(name)}`);
+  history.replaceState(null, "", `?stream=${encodeURIComponent(name)}&filter=${$("#filter").value}`);
   defaultsApplied = false;
   listStreams();
 }
@@ -177,6 +177,7 @@ $("#pause").onclick = () => {
     times: buf.times.slice(), data: buf.data.slice(), events: events.events.slice() }) : null;
 };
 
+if (["bandpass", "highpass", "none"].includes(params.get("filter"))) $("#filter").value = params.get("filter");
 const initial = params.get("stream");
 if (initial) setStream(initial); else listStreams();
 tick(); tickEvents(); requestAnimationFrame(frame);

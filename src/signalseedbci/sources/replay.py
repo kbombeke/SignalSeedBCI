@@ -79,7 +79,7 @@ def replay_file(path: str, **kwargs) -> None:
     replay_recording(load_recording(path, **load_kw), **kwargs)
 
 
-def stream_synthetic(gen: SyntheticEEG, eeg_name: str = DEFAULT_EEG_STREAM,
+def stream_synthetic(gen, eeg_name: str = DEFAULT_EEG_STREAM,
                      marker_name: str | None = DEFAULT_MARKER_STREAM, duration: float | None = None,
                      chunk_s: float = 0.02, verbose: bool = True) -> None:
     info = SignalInfo(gen.ch_names, gen.sfreq)
