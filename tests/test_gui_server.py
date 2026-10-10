@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from bciflow.gui.server import App, dump_pipeline, make_handler, validate_spec
+from signalseedbci.gui.server import App, dump_pipeline, make_handler, validate_spec
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -142,7 +142,7 @@ def test_session_starts_linked_source_with_pipeline_stream_names(server):
 
 def test_session_offline_and_errors(server):
     base, app = server
-    from bciflow.sources.synthetic import SyntheticEEG
+    from signalseedbci.sources.synthetic import SyntheticEEG
     (app.project / "data").mkdir(exist_ok=True)
     SyntheticEEG(seed=1).make_raw(30).save(app.project / "data" / "x_raw.fif", verbose="error")
     spec = {"name": "f", "nodes": {"src": {"type": "FileSource", "params": {"path": "../data/x_raw.fif"}},

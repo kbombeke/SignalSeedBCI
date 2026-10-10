@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from bciflow.bridge.actiview import decode_24bit
-from bciflow.bridge.biosemi import (LSB_UV, SYNC, FakeActiveTwo, FrameParser, RingReader, channel_labels,
+from signalseedbci.bridge.actiview import decode_24bit
+from signalseedbci.bridge.biosemi import (LSB_UV, SYNC, FakeActiveTwo, FrameParser, RingReader, channel_labels,
                                     decode_status, encode_status, frame_channels, frames_to_uv)
 
 
@@ -71,7 +71,7 @@ def test_parser_resyncs_after_corruption():
 
 
 def test_values_roundtrip_within_quantisation():
-    from bciflow.sources.synthetic import SyntheticEEG
+    from signalseedbci.sources.synthetic import SyntheticEEG
 
     dev = FakeActiveTwo(speedmode=7, mk2=True, realtime=False, seed=3, ring_bytes=8_000_000)
     dev.start()

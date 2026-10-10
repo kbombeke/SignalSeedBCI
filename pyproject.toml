@@ -1,7 +1,7 @@
 [project]
-name = "bciflow"
+name = "signalseedbci"
 version = "0.1.0"
-description = "LSL-based BCI toolkit: BioSemi ActiveTwo bridge, replay/simulation, and a node-graph pipeline with MNE/SciPy processing"
+description = "SignalSeedBCI — LSL-based BCI toolkit: BioSemi ActiveTwo bridge, replay/simulation, and a node-graph pipeline with MNE/SciPy processing"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -20,14 +20,15 @@ xdf = ["pyxdf>=1.16"]
 dev = ["pytest>=7", "pyriemann>=0.6", "pyxdf>=1.16"]
 
 [project.scripts]
-bciflow = "bciflow.cli:main"
+signalseedbci = "signalseedbci.cli:main"
+ssbci = "signalseedbci.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/bciflow"]
+packages = ["src/signalseedbci"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

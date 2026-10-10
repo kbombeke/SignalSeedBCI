@@ -4,7 +4,7 @@
 # Trigger 1 = eyes closed / alpha burst, 2 = eyes open (as in the alpha-bursts data) is
 # used only to report how well the decisions match.
 #
-#   test data: bciflow synth --paradigm alpha-bursts --record data/alpha_bursts_raw.fif --duration 180
+#   test data: signalseedbci synth --paradigm alpha-bursts --record data/alpha_bursts_raw.fif --duration 180
 name: Eyes open / closed (alpha)
 
 nodes:
@@ -37,10 +37,10 @@ nodes:
     params: {feature: mean, high_label: closed, low_label: open, truth: {'1': closed, '2': open}}
   eyes:
     type: EyesFeedback
-    params: {name: bciflow-eyes, closed_label: closed}
+    params: {name: signalseedbci-eyes, closed_label: closed}
   alphaplot:
     type: LSLSignalOut
-    params: {name: bciflow-alpha, type: Feedback}
+    params: {name: signalseedbci-alpha, type: Feedback}
 
 edges:
   - src.signal -> names.in

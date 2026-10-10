@@ -5,14 +5,14 @@ import uuid
 
 import numpy as np
 
-from bciflow.lsl import marker_outlet, signal_outlet
-from bciflow.pipeline.node import RunContext
-from bciflow.pipeline.nodes.sources import LSLSource
-from bciflow.streams import SignalInfo
+from signalseedbci.lsl import marker_outlet, signal_outlet
+from signalseedbci.pipeline.node import RunContext
+from signalseedbci.pipeline.nodes.sources import LSLSource
+from signalseedbci.streams import SignalInfo
 
 
 def test_lsl_roundtrip_with_labels_and_markers():
-    name = f"bciflow-test-{uuid.uuid4().hex[:8]}"
+    name = f"signalseedbci-test-{uuid.uuid4().hex[:8]}"
     info = SignalInfo(["A1", "A2", "EX1"], 256.0, ["eeg", "eeg", "misc"])
     eeg = signal_outlet(name, info)
     mk = marker_outlet(name + "-m")

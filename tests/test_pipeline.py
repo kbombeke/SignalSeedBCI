@@ -4,11 +4,11 @@ import numpy as np
 import pytest
 import yaml
 
-from bciflow.pipeline import Graph, RunContext
-from bciflow.pipeline.nodes.epochs import Epocher
-from bciflow.pipeline.nodes.preprocessing import BandpassFilter, Decimate, NotchFilter
-from bciflow.sources.synthetic import SyntheticEEG
-from bciflow.streams import Marker, SignalChunk, SignalInfo
+from signalseedbci.pipeline import Graph, RunContext
+from signalseedbci.pipeline.nodes.epochs import Epocher
+from signalseedbci.pipeline.nodes.preprocessing import BandpassFilter, Decimate, NotchFilter
+from signalseedbci.sources.synthetic import SyntheticEEG
+from signalseedbci.streams import Marker, SignalChunk, SignalInfo
 
 INFO = SignalInfo([f"C{i}" for i in range(4)], 512.0)
 
@@ -141,10 +141,10 @@ def test_lsl_signal_out_republishes_markers():
 
     import pylsl
 
-    from bciflow.pipeline.nodes.sinks import LSLSignalOut
-    from bciflow.streams import FeaturesMeta, Features
+    from signalseedbci.pipeline.nodes.sinks import LSLSignalOut
+    from signalseedbci.streams import FeaturesMeta, Features
 
-    name = f"bciflow-test-{uuid.uuid4().hex[:6]}"
+    name = f"signalseedbci-test-{uuid.uuid4().hex[:6]}"
     node = LSLSignalOut("out", {"name": name})
     node.setup({"in": FeaturesMeta(["a", "b"]), "markers": None})
     info = pylsl.resolve_byprop("name", name + "-markers", timeout=5)
@@ -163,11 +163,11 @@ def test_spectrum_out_peak_labels_and_limits():
 
     import pylsl
 
-    from bciflow.pipeline.nodes.sinks import SpectrumOut
+    from signalseedbci.pipeline.nodes.sinks import SpectrumOut
 
     sf = 256.0
     info = SignalInfo(["Oz", "Pz"], sf)
-    name = f"bciflow-test-{uuid.uuid4().hex[:6]}"
+    name = f"signalseedbci-test-{uuid.uuid4().hex[:6]}"
     node = SpectrumOut("spec", {"name": name, "window_s": 2, "step_s": 0.25, "fmin": 1, "fmax": 40})
     node.setup({"in": info})
     assert len(node.freqs) == 40 and node.freqs[0] == 1 and node.freqs[-1] == 40
@@ -193,8 +193,8 @@ def test_spectrum_out_peak_labels_and_limits():
 
 
 def test_threshold_classifier_adaptive_hysteresis_and_truth():
-    from bciflow.pipeline.nodes.classify import ThresholdClassifier
-    from bciflow.streams import Features, FeaturesMeta
+    from signalseedbci.pipeline.nodes.classify import ThresholdClassifier
+    from signalseedbci.streams import Features, FeaturesMeta
 
     rng = np.random.default_rng(0)
     node = ThresholdClassifier("state", {"truth": {"1": "closed", "2": "open"}, "smooth_s": 0.5})
@@ -221,8 +221,8 @@ def test_threshold_classifier_adaptive_hysteresis_and_truth():
 
 
 def test_threshold_classifier_fixed():
-    from bciflow.pipeline.nodes.classify import ThresholdClassifier
-    from bciflow.streams import Features, FeaturesMeta
+    from signalseedbci.pipeline.nodes.classify import ThresholdClassifier
+    from signalseedbci.streams import Features, FeaturesMeta
 
     node = ThresholdClassifier("s", {"mode": "fixed", "threshold": 3.0, "smooth_s": 0, "hysteresis": 0,
                                      "feature": "Oz:alpha"})

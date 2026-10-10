@@ -1,8 +1,8 @@
 # Two-class motor imagery (left vs right hand), cue-based.
 #
-#   train:     bciflow train pipelines/motor_imagery.yaml --data calibration.bdf
-#   live:      bciflow run   pipelines/motor_imagery.yaml
-#   simulate:  bciflow run   pipelines/motor_imagery.yaml --replay session2.bdf
+#   train:     signalseedbci train pipelines/motor_imagery.yaml --data calibration.bdf
+#   live:      signalseedbci run   pipelines/motor_imagery.yaml
+#   simulate:  signalseedbci run   pipelines/motor_imagery.yaml --replay session2.bdf
 #
 # Trigger codes 1 / 2 on the BioSemi trigger port (or a marker stream) mark the cues.
 name: Motor imagery (CSP + LDA)
@@ -34,7 +34,7 @@ nodes:
     params: {estimator: csp_lda, model_path: ../models/motor_imagery.joblib}
   feedback:
     type: PredictionOut
-    params: {name: bciflow-predictions}
+    params: {name: signalseedbci-predictions}
   log:
     type: Logger
 

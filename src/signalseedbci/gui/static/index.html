@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SignalSeedBCI</title>
+<link rel="icon" type="image/png" href="img/favicon.png">
+<link rel="apple-touch-icon" href="img/apple-touch-icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="toolbar">
+  <div class="brand"><img class="logo" src="img/logo.png" alt="">SignalSeedBCI</div>
+  <div class="group">
+    <select id="pipelineSelect" title="Open pipeline"></select>
+    <button id="btnNew" title="New pipeline">New</button>
+    <button id="btnSave" title="Save (⌘S)">Save</button>
+    <button id="btnSaveAs">Save as…</button>
+    <span id="dirtyDot" class="dirty" title="Unsaved changes" hidden>●</span>
+  </div>
+  <div id="validity" class="validity" title="Validation"></div>
+  <div class="spacer"></div>
+  <div class="group run">
+    <label for="dataSource" class="data-label">Data</label>
+    <select id="dataSource" title="Where the pipeline's data comes from when you press Run">
+      <optgroup label="Real">
+        <option value="live">Amplifier / bridge (live)</option>
+      </optgroup>
+      <optgroup label="Simulated, real time">
+        <option value="replay">Replay a recording</option>
+        <option value="synthetic">Synthetic EEG</option>
+        <option value="fake-bridge">Simulated ActiveTwo</option>
+      </optgroup>
+      <optgroup label="Evaluation">
+        <option value="offline">Recording, offline (as fast as possible)</option>
+      </optgroup>
+    </select>
+    <select id="dataDetail" hidden></select>
+    <span id="runStatus" class="run-status" hidden></span>
+    <button id="btnTrain" title="Fit the Classifier nodes on recordings">Train…</button>
+    <button id="btnRun" class="primary">▶ Run</button>
+    <button id="btnStop" class="danger" hidden>■ Stop</button>
+  </div>
+</header>
+
+<main class="workspace">
+  <aside class="palette">
+    <input id="paletteSearch" type="search" placeholder="Search nodes…">
+    <div id="paletteList"></div>
+    <p class="hint">Drag onto the canvas, or click to add.</p>
+  </aside>
+
+  <section id="canvasWrap" class="canvas-wrap" tabindex="0">
+    <div id="canvas" class="canvas">
+      <svg id="edges" class="edges"></svg>
+      <div id="nodes"></div>
+    </div>
+    <div class="canvas-tools">
+      <button id="btnZoomIn" title="Zoom in">+</button>
+      <button id="btnZoomOut" title="Zoom out">−</button>
+      <button id="btnFit" title="Fit to view">Fit</button>
+      <button id="btnLayout" title="Auto-arrange nodes">Arrange</button>
+    </div>
+    <div class="legend" id="legend"></div>
+  </section>
+
+  <aside id="inspector" class="inspector"></aside>
+</main>
+
+<section class="bottom" id="bottom">
+  <nav class="tabs">
+    <button data-tab="console" class="active">Console</button>
+    <button data-tab="monitor">Monitor</button>
+    <div class="spacer"></div>
+    <button id="btnCollapse" title="Collapse / expand">▾</button>
+  </nav>
+
+  <div class="tab-body" data-body="console">
+    <div class="proc-list" id="procList"></div>
+    <pre class="log" id="log"></pre>
+  </div>
+
+  <div class="tab-body" data-body="monitor" hidden>
+    <div class="stream-list">
+      <div class="row-head"><span>LSL streams</span><button id="btnStreams">Refresh</button></div>
+      <div id="streamList"><p class="muted">Click Refresh.</p></div>
+    </div>
+    <div class="scope">
+      <div class="scope-tools">
+        <span id="scopeTitle" class="muted">Select a numeric stream to plot</span>
+        <div class="spacer"></div>
+        <label>Display <select id="scopeFilter"><option value="bandpass" selected>1–40 Hz + notch</option><option value="highpass">high-pass 0.5 Hz</option><option value="none">raw</option></select></label>
+        <label>Plot <select id="scopeMode"><option value="auto">auto</option><option value="stack">stacked</option><option value="overlay">overlaid</option></select></label>
+        <label>Scale <select id="scopeScale"><option>auto</option><option>10</option><option>25</option><option selected>50</option><option>100</option><option>250</option><option>1000</option></select> µV</label>
+        <label>Window <select id="scopeWin"><option>2</option><option selected>5</option><option>10</option><option>30</option><option>60</option></select> s</label>
+        <label>Channels <select id="scopePage"></select></label>
+        <button id="btnScopeWindow" title="Open in a separate window" hidden>⧉ Window</button>
+      </div>
+      <canvas id="scopeCanvas"></canvas>
+    </div>
+    <div class="events">
+      <div class="row-head"><span>Events & predictions</span></div>
+      <div id="probaBars"></div>
+      <ol id="eventList" class="event-list"></ol>
+    </div>
+  </div>
+</section>
+
+<div id="modal" class="modal" hidden>
+  <div class="modal-box">
+    <h2 id="modalTitle"></h2>
+    <div id="modalBody"></div>
+    <div class="modal-actions">
+      <button id="modalCancel">Cancel</button>
+      <button id="modalOk" class="primary">OK</button>
+    </div>
+  </div>
+</div>
+<div id="toast" class="toast" hidden></div>
+
+<script src="scope.js"></script>
+<script src="eyes.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

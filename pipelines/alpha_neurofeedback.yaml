@@ -1,9 +1,9 @@
 # Continuous relative alpha power over posterior channels, published as an LSL
-# stream ("bciflow-alpha") that a feedback program can read. No training needed.
-# Triggers are republished as "bciflow-alpha-markers" for the plots.
+# stream ("signalseedbci-alpha") that a feedback program can read. No training needed.
+# Triggers are republished as "signalseedbci-alpha-markers" for the plots.
 #
-#   bciflow run pipelines/alpha_neurofeedback.yaml
-#   test data: bciflow synth --paradigm alpha-bursts --record data/alpha_bursts_raw.fif --duration 180
+#   signalseedbci run pipelines/alpha_neurofeedback.yaml
+#   test data: signalseedbci synth --paradigm alpha-bursts --record data/alpha_bursts_raw.fif --duration 180
 name: Alpha neurofeedback
 
 nodes:
@@ -33,10 +33,10 @@ nodes:
     params: {bands: {alpha: [8, 12]}, relative: true, log: false}
   out:
     type: LSLSignalOut
-    params: {name: bciflow-alpha, type: Feedback}
+    params: {name: signalseedbci-alpha, type: Feedback}
   spectrum:
     type: SpectrumOut
-    params: {name: bciflow-spectrum, window_s: 2, step_s: 0.25, fmin: 1, fmax: 40}
+    params: {name: signalseedbci-spectrum, window_s: 2, step_s: 0.25, fmin: 1, fmax: 40}
   log:
     type: Logger
     params: {every_s: 5}
