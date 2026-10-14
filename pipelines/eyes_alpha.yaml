@@ -56,7 +56,7 @@ edges:
   - alpha.out -> alphaplot.in
   - src.markers -> alphaplot.markers
 
-layout:  # node positions in the editor
+layout:  # node positions in the editor: [x, y] or [x, y, width, view height]
   src: [30, 30]
   names: [280, 30]
   car: [530, 30]
@@ -66,5 +66,5 @@ layout:  # node positions in the editor
   windows: [280, 220]
   alpha: [530, 220]
   state: [780, 220]
-  eyes: [1030, 220]
-  alphaplot: [780, 400]
+  eyes: [1232, 220, 463, 322]
+  alphaplot: [780, 400, 422, 310]
