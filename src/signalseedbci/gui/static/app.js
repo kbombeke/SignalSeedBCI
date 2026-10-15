@@ -833,6 +833,8 @@ function paramField(node, name, ps) {
     input = el("select", {}, ...ps.choices.map((c) => el("option", { value: c === null ? "" : c }, c === null ? "— none —" : c)));
     input.value = has ? fmtValue(value) : fmtValue(ps.default);
     input.onchange = () => set(input.value === "" ? null : input.value);
+  } else if (node.type === "RenameChannels" && name === "mapping") {
+    input = renameTable(node, has ? value : {}, set);
   } else if (node.type === "Classifier" && name === "estimator") {
     const listId = "estimators-list";
     input = el("input", { type: "text", list: listId, value: has ? value : "", placeholder: fmtValue(ps.default) });
@@ -852,6 +854,100 @@ function paramField(node, name, ps) {
   field.append(input);
   if (ps.help) field.append(el("div", { class: "help" }, ps.help));
   return field;
+}
+
+// ------------------------------------------------------------------ RenameChannels: one row per channel
+const channelCache = new Map();  // "file:<path>" | "stream:<name>" -> channel names (null while loading)
+let lslStreams = null;           // numeric LSL streams seen by the editor (null: not looked yet)
+
+function currentRecording() {
+  const src = $("#dataSource").value, f = $("#dataDetail").value;
+  return needsFile(src) && f && f !== CREATE ? f : null;
+}
+
+// where the table takes its channel names from: the node's own choice, else the recording under Data
+function channelSourceKey() {
+  const own = localStorageGet("renameFrom");
+  if (own?.startsWith("stream:") || (own?.startsWith("file:") && S.files.includes(own.slice(5)))) return own;
+  const rec = currentRecording() || localStorageGet("dataFile");
+  return S.files.includes(rec) ? `file:${rec}` : (S.files[0] ? `file:${S.files[0]}` : "");
+}
+
+function loadChannels(key) {
+  if (!key || channelCache.has(key)) return;
+  channelCache.set(key, null);  // loading
+  const [kind, name] = [key.slice(0, key.indexOf(":")), key.slice(key.indexOf(":") + 1)];
+  api(`/api/channels?${kind}=${encodeURIComponent(name)}`)
+    .then((r) => channelCache.set(key, r.channels))
+    .catch((e) => { channelCache.delete(key); toast(`Channels of ${name}: ${e.message}`, true); })
+    .finally(() => renderInspector());
+}
+
+function lookForStreams() {
+  lslStreams = lslStreams || [];
+  api("/api/streams?wait=1")
+    .then((r) => { lslStreams = r.streams.filter((x) => x.format === "numeric").map((x) => x.name); })
+    .catch(() => {})
+    .finally(() => renderInspector());
+}
+
+function renameTable(node, mapping, set) {
+  if (lslStreams === null) lookForStreams();
+  const key = channelSourceKey();
+  loadChannels(key);
+  const channels = channelCache.get(key) || null;
+  const label = key.startsWith("stream:") ? `live stream ${key.slice(7)}` : key.slice(5).split("/").pop();
+
+  const from = el("select", { "data-key": `${node.id}.mapping.__from`, title: "Where the channel names come from" },
+    ...S.files.map((f) => el("option", { value: `file:${f}` }, f.replace(/^data\//, ""))),
+    ...(lslStreams?.length ? [el("optgroup", { label: "Running LSL streams" },
+      ...lslStreams.map((n) => el("option", { value: `stream:${n}` }, n)))] : []));
+  if (key.startsWith("stream:") && !lslStreams?.includes(key.slice(7)))
+    from.append(el("option", { value: key }, `${key.slice(7)} (not running)`));
+  from.value = key;
+  from.onchange = () => { localStorageSet("renameFrom", from.value); renderInspector(); };
+  const refresh = el("button", { title: "Look for running LSL streams again", onclick: () => { channelCache.delete(key); lookForStreams(); } }, "↻");
+
+  const names = [...(channels || [])];
+  for (const old of Object.keys(mapping)) if (!names.includes(old)) names.push(old);
+
+  const box = el("div", { class: "rename" });
+  const rows = el("div", { class: "rename-rows" });
+  const collect = () => {
+    const out = {};
+    for (const inp of rows.querySelectorAll("input[data-old]")) {
+      const v = inp.value.trim();
+      if (v && v !== inp.dataset.old) out[inp.dataset.old] = v;
+    }
+    set(Object.keys(out).length ? out : undefined);
+  };
+  for (const old of names) {
+    const inp = el("input", { type: "text", value: mapping[old] ?? "", placeholder: old, "data-old": old,
+      "data-key": `${node.id}.mapping.${old}`, onchange: collect });
+    const extra = channels && !channels.includes(old);
+    rows.append(el("div", { class: "rename-row" + (extra ? " extra" : "") },
+      el("span", { class: "old", title: extra ? "Not in the selected recording" : old }, old), el("span", { class: "arrow" }, "→"), inp,
+      extra || !channels ? el("button", { class: "x", title: "Remove", onclick: () => { inp.value = ""; collect(); renderInspector(); } }, "×") : null));
+  }
+  // a channel that is not listed (no recording selected, or a live stream)
+  const addOld = el("input", { type: "text", placeholder: "old name", "data-key": `${node.id}.mapping.__old` });
+  const addNew = el("input", { type: "text", placeholder: "new name", "data-key": `${node.id}.mapping.__new` });
+  const add = () => {
+    const o = addOld.value.trim(), n = addNew.value.trim();
+    if (!o || !n) return;
+    addNew.blur();  // or the re-render would put the typed text back
+    set({ ...mapping, [o]: n });
+    renderInspector();
+  };
+  addNew.onkeydown = (e) => { if (e.key === "Enter") add(); };
+  const note = !key ? "No recordings or running streams found: add names by hand below."
+    : channels ? `${channels.length} channels in ${label}. Leave a box empty to keep the name.` : `Reading channels of ${label}…`;
+  box.append(el("div", { class: "rename-from" }, el("span", {}, "Channels from"), from, refresh),
+    el("div", { class: "help" }, note), rows,
+    el("div", { class: "rename-row add" }, addOld, el("span", { class: "arrow" }, "→"), addNew,
+      el("button", { title: "Add", onclick: add }, "＋")));
+  if (names.length > 12) rows.classList.add("scroll");
+  return box;
 }
 
 function relToPipeline(projectRel) {
@@ -986,7 +1082,10 @@ async function refreshPipelines(selectPath) {
 }
 
 async function refreshFiles() {
-  S.files = (await api("/api/files")).files;
+  const files = (await api("/api/files")).files;
+  if (S.filesLoaded && files.join("\n") === S.files.join("\n")) return;  // unchanged: keep the open menu as it is
+  S.files = files;
+  S.filesLoaded = true;
   updateDataDetail();
 }
 
@@ -1016,7 +1115,7 @@ function updateDataDetail() {
 async function onDataDetailChange() {
   const src = $("#dataSource").value, v = $("#dataDetail").value;
   if (v === CREATE) { updateDataDetail(); return createRecording(); }
-  if (needsFile(src)) localStorageSet("dataFile", v);
+  if (needsFile(src)) { localStorageSet("dataFile", v); localStorageSet("renameFrom", ""); renderInspector(); }
   if (src === "synthetic") localStorageSet("dataParadigm", v);
 }
 
@@ -1429,8 +1528,11 @@ function setupToolbar() {
   $("#btnTrain").onclick = train;
   $("#dataSource").value = localStorageGet("dataSource") || "live";
   if (!$("#dataSource").value) $("#dataSource").value = "live";
-  $("#dataSource").onchange = () => { localStorageSet("dataSource", $("#dataSource").value); updateDataDetail(); };
+  $("#dataSource").onchange = () => { localStorageSet("dataSource", $("#dataSource").value); updateDataDetail(); refreshFiles(); renderInspector(); };
   $("#dataDetail").onchange = onDataDetailChange;
+  // files copied into data/ while the page is open: pick them up when you come back or use the menus
+  $("#dataDetail").onfocus = refreshFiles;
+  window.addEventListener("focus", refreshFiles);
   $("#paletteSearch").oninput = renderPalette;
   $$(".tabs [data-tab]").forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
   $("#btnCollapse").onclick = () => {

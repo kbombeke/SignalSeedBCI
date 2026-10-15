@@ -87,7 +87,10 @@ class PickChannels(_SignalNode):
 
 
 class RenameChannels(_SignalNode):
-    """Rename channels, e.g. BioSemi A1..B32 to 10-20 names."""
+    """Rename channels, e.g. a recording's own labels or BioSemi A1..B32 to 10-20 names.
+
+    Put it right after the source; later nodes then use the new names. Channels not in
+    the mapping keep their name."""
 
     params = {
         "preset": Param(None, "choice", "BioSemi cap layout", choices=[None, *PRESETS]),
@@ -97,8 +100,16 @@ class RenameChannels(_SignalNode):
     def setup(self, in_meta):
         info = in_meta["in"]
         mapping = biosemi_to_1020(self.p.preset) if self.p.preset else {}
-        mapping.update(self.p.mapping or {})
-        return {"out": info.copy(ch_names=[mapping.get(c, c) for c in info.ch_names])}
+        explicit = {str(k): str(v) for k, v in (self.p.mapping or {}).items()}
+        unknown = [k for k in explicit if k not in info.ch_names]
+        if unknown:
+            self.log(f"not in the stream, ignored: {', '.join(unknown)}")
+        mapping.update(explicit)
+        names = [mapping.get(c, c) for c in info.ch_names]
+        dupes = sorted({n for n in names if names.count(n) > 1})
+        if dupes:
+            raise ValueError(f"{self.id}: channel name(s) {dupes} would occur more than once")
+        return {"out": info.copy(ch_names=names)}
 
     def transform(self, data, times):
         return SignalChunk(data, times)

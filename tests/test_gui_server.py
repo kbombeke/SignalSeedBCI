@@ -201,3 +201,58 @@ def test_session_live_training(server):
     assert r["run"]["label"].startswith("train motor_imagery")
     call(base, "/api/process/stop", {"id": r["source"]["id"]})  # linked: stops the training too
     _wait(base, r["run"]["id"], lambda log: not log["running"])
+
+
+def test_channels_of_a_recording(server):
+    base, app = server
+    from signalseedbci.sources.synthetic import SyntheticEEG
+    (app.project / "data").mkdir(exist_ok=True)
+    raw = SyntheticEEG(seed=1).make_raw(5)
+    raw.save(app.project / "data" / "c_raw.fif", verbose="error")
+    code, r = call(base, "/api/channels?file=data/c_raw.fif")
+    stim = [c for c, t in zip(raw.ch_names, raw.get_channel_types()) if t == "stim"]
+    assert code == 200 and r["channels"] == [c for c in raw.ch_names if c not in stim]
+    assert call(base, "/api/channels?file=../x.bdf")[0] in (400, 403)
+    code, r = call(base, "/api/channels?stream=NoSuchStream-xyz")
+    assert code == 404 and "not running" in r["error"]
+
+
+def test_viewer_follows_a_new_stream_with_the_same_name(tmp_path):
+    # a pipeline stops and another one publishes the same output name with other channels
+    import subprocess
+    import sys
+    import uuid
+
+    from signalseedbci.gui.server import Monitor
+    from signalseedbci.sources.synthetic import SyntheticEEG
+
+    raw = SyntheticEEG(seed=1).make_raw(60).pick([0, 1, 2])  # 3 channels instead of 32
+    raw.save(tmp_path / "three_raw.fif", verbose="error")
+    name, mon = f"view-{uuid.uuid4().hex[:6]}", Monitor()
+
+    def start(*args):
+        return subprocess.Popen([sys.executable, "-m", "signalseedbci", *args, "--name", name, "--marker-name", "none"],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def channels_with_fresh_data(timeout=20):
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            d = mon.watch(name, 0)
+            if d.get("times") and d["now"] - d["times"][-1] < 0.5:
+                return len(d["ch_names"])
+            time.sleep(0.3)
+        return None
+
+    first = start("synth", "--paradigm", "alpha-bursts")
+    try:
+        assert channels_with_fresh_data() == 32
+    finally:
+        first.kill()
+        first.wait()
+    time.sleep(1.0)
+    second = start("replay", str(tmp_path / "three_raw.fif"))
+    try:
+        assert channels_with_fresh_data() == 3
+    finally:
+        second.kill()
+        mon.unwatch(name)

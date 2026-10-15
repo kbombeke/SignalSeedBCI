@@ -1,0 +1,36 @@
+name: In-ear gaze direction (EOG)
+
+nodes:
+  src:
+    type: LSLSource
+    params: {signal_name: BioSemi, marker_name: BioSemi-Triggers}
+  ref:
+    type: Rereference
+    params: {ref: [L_MASTOID], drop_ref: true}
+  down:
+    type: Decimate
+    params: {target_sfreq: 128}
+  lowpass:
+    type: BandpassFilter
+    params: {l_freq: null, h_freq: 10, order: 4}
+  eog:
+    type: LSLSignalOut
+    params: {name: signalseedbci-eog, type: EOG, display: none}
+  names:
+    type: RenameChannels
+
+edges:
+  - ref.out -> down.in
+  - down.out -> lowpass.in
+  - lowpass.out -> eog.in
+  - src.markers -> eog.markers
+  - src.signal -> names.in
+  - names.out -> ref.in
+
+layout:  # node positions in the editor: [x, y] or [x, y, width, view height]
+  src: [-183, -182]
+  ref: [50, 54]
+  down: [53, 175]
+  lowpass: [53, 286]
+  eog: [413, -186, 1031, 841]
+  names: [46, -55]

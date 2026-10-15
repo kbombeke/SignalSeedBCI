@@ -20,52 +20,31 @@ nodes:
     params: {signal_name: BioSemi, marker_name: BioSemi-Triggers}
   ref:
     type: Rereference
-    params: {ref: [Neck], drop_ref: true}
+    params: {ref: [L_MASTOID], drop_ref: true}
   down:
     type: Decimate
     params: {target_sfreq: 128}
   lowpass:
     type: BandpassFilter
     params: {l_freq: null, h_freq: 10, order: 4}
-  epochs:
-    type: Epocher
-    params: {events: {'1': up, '2': down, '3': left, '4': right}, tmin: -0.3, tmax: 1.2, baseline: [-0.3, 0]}
-  means:
-    type: TimeWindowMeans
-    params: {windows: [[0.3, 0.7], [0.7, 1.1]]}
-  clf:
-    type: Classifier
-    params: {estimator: lda, model_path: ../models/inear_gaze.joblib}
-  gaze:
-    type: GazeFeedback
-    params: {name: signalseedbci-gaze, hold_s: 1.5}
-  log:
-    type: Logger
   eog:
     type: LSLSignalOut
     params: {name: signalseedbci-eog, type: EOG, display: none}
+  names:
+    type: RenameChannels
 
 edges:
-  - src.signal -> ref.in
   - ref.out -> down.in
   - down.out -> lowpass.in
-  - lowpass.out -> epochs.in
-  - src.markers -> epochs.markers
-  - epochs.out -> means.in
-  - means.out -> clf.in
-  - clf.out -> gaze.in
-  - clf.out -> log.in
   - lowpass.out -> eog.in
   - src.markers -> eog.markers
+  - src.signal -> names.in
+  - names.out -> ref.in
 
 layout:  # node positions in the editor: [x, y] or [x, y, width, view height]
   src: [30, 30]
   ref: [280, 30]
   down: [530, 30]
   lowpass: [780, 30]
-  epochs: [30, 220]
-  means: [280, 220]
-  clf: [530, 220]
-  gaze: [780, 220, 395, 382]
-  log: [530, 380]
-  eog: [1205, -199, 896, 777]
+  eog: [1212, -187, 1031, 841]
+  names: [212, -125]

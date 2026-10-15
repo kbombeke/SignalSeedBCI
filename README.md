@@ -108,7 +108,7 @@ uv pip install --python .venv -e ".[dev]"
 # 4. check
 source .venv/bin/activate
 signalseedbci --version
-pytest -q            # optional: 55 tests, about 70 s
+pytest -q            # optional: 58 tests, about 70 s
 ```
 
 `.[dev]` also installs pyRiemann (Riemannian classifiers), pyxdf (reading XDF files)
@@ -510,7 +510,7 @@ chunks, so offline training and live use give identical results.
 - `include` / `exclude`: names or regular expressions, e.g. `[O1, Oz, O2]` or `["EX.*"]`
 - `types`: e.g. `[eeg]` to drop auxiliary channels
 
-**RenameChannels**: rename channels, e.g. BioSemi `A1…B32` to 10-20 names.
+**RenameChannels**: rename channels, e.g. BioSemi `A1…B32` to 10-20 names, or a recording's own labels. Put it right after the source; later nodes use the new names. In the editor, pick under *Channels from* a recording in the project or a running LSL stream (such as the bridge). The editor then lists its channels with a box for each new name; leave a box empty to keep the name. It starts with the recording chosen under Data. You can also add names by hand.
 - `preset`: `biosemi16/32/64/128/160/256` (MNE's BioSemi cap order; check your cap's layout)
 - `mapping`: explicit `{old: new}` names, applied after the preset
 

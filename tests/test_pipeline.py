@@ -303,3 +303,14 @@ def test_inear_gaze_pipeline_train_and_evaluate(tmp_path):
     ctx = RunContext(mode="online", realtime=False)
     Graph.from_yaml(p, ctx, _source(test)).run(verbose=False)
     assert ctx.store["accuracy"]["log"] > 0.8
+
+
+def test_rename_channels_mapping_checks(capsys):
+    from signalseedbci.pipeline.nodes.preprocessing import RenameChannels
+
+    node = RenameChannels("names", {"mapping": {"C0": "L_ear", "C2": "R_ear", "Nope": "X"}})
+    out = node.setup({"in": INFO})["out"]
+    assert out.ch_names == ["L_ear", "C1", "R_ear", "C3"]
+    assert "not in the stream, ignored: Nope" in capsys.readouterr().out
+    with pytest.raises(ValueError, match="more than once"):
+        RenameChannels("names", {"mapping": {"C0": "C1"}}).setup({"in": INFO})

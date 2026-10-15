@@ -76,8 +76,12 @@ code { font-family: var(--mono); font-size: 12px; }
   display: flex; align-items: center; gap: 12px; padding: 8px 12px; min-width: 0;
   background: var(--panel); border-bottom: 1px solid var(--border);
 }
-.brand { font-weight: 700; letter-spacing: .3px; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
-.logo { width: 26px; height: 26px; flex: none; }
+.brand { display: flex; align-items: center; gap: 12px; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
+.logo { width: 72px; height: 72px; flex: none; }
+.brand-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.brand-name { font-weight: 700; font-size: 21px; letter-spacing: .3px; }
+.tagline, .credits { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; }
+.credits { color: var(--muted); }
 .empty-canvas .watermark { width: 120px; height: 120px; opacity: .12; display: block; margin: 0 auto 10px; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .logo, :root:not([data-theme="light"]) .watermark { filter: invert(1); } }
 :root[data-theme="dark"] .logo, :root[data-theme="dark"] .watermark { filter: invert(1); }
@@ -178,6 +182,17 @@ code { font-family: var(--mono); font-size: 12px; }
 .field input[type=text], .field select, .field textarea { width: 100%; }
 .field input.invalid { border-color: var(--danger); }
 .field .help { color: var(--muted); font-size: 11px; margin-top: 2px; line-height: 1.35; }
+.rename-from { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px; align-items: center; margin-bottom: 4px; font-size: 12px; }
+.field .rename-from select { width: 100%; min-width: 0; }
+.rename-from button { padding: 1px 7px; }
+.rename-rows.scroll { max-height: 340px; overflow-y: auto; padding-right: 4px; }
+.rename-row { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.2fr) auto; gap: 6px; align-items: center; margin-top: 4px; }
+.rename-row .old { font-family: var(--mono); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rename-row.extra .old { color: var(--muted); text-decoration: underline dotted; }
+.rename-row .arrow { color: var(--muted); }
+.rename-row input[type=text] { width: 100%; min-width: 0; }
+.rename-row.add { margin-top: 8px; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.2fr) auto; }
+.rename-row button { padding: 1px 7px; }
 .field.set > label::after { content: "●"; color: var(--accent); font-size: 9px; margin-left: 4px; }
 .msg { border-radius: 6px; padding: 6px 8px; margin: 6px 0; font-size: 12px; line-height: 1.4; }
 .msg.err { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }

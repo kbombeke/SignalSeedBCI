@@ -69,6 +69,18 @@ def load_recording(path: str | Path, stim_channel: str | None = "auto", event_ma
     return Recording(data * scale[:, None], times, info, markers)
 
 
+def recording_channels(path: str | Path) -> list[str]:
+    """Names of the channels ``load_recording`` (and so a replay) delivers, read from the header only."""
+    path = Path(path)
+    if path.suffix.lower() == ".xdf":
+        return _load_xdf(path).info.ch_names
+
+    import mne
+
+    raw = mne.io.read_raw(path, preload=False, verbose="error")
+    return [c for c, t in zip(raw.ch_names, raw.get_channel_types()) if t in SIGNAL_TYPES]
+
+
 def _load_xdf(path: Path) -> Recording:
     try:
         import pyxdf

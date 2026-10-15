@@ -147,6 +147,7 @@ class StreamWatcher:
 
         self.pylsl = pylsl
         self.name = info.name()
+        self.uid = info.uid()
         self.is_string = info.channel_format() == pylsl.cf_string
         flags = pylsl.proc_clocksync | pylsl.proc_monotonize
         if not self.is_string and info.nominal_srate() > 0:
@@ -164,7 +165,7 @@ class StreamWatcher:
         self.values: deque = deque()
         self._carry_t = np.zeros(0)
         self._carry_x = np.zeros((0, len(self.ch_names)))
-        self.last_access = time.monotonic()
+        self.last_access = self.last_data = self.last_check = time.monotonic()
         self.error = None
         self._stop = False
         self._lock = threading.Lock()
@@ -179,7 +180,8 @@ class StreamWatcher:
                 else:
                     x, ts = self.inlet.pull_chunk(timeout=0.2, max_samples=8192, as_numpy=True)
                     new = self._decimate(np.asarray(x, float), np.asarray(ts, float)) if len(ts) else []
-                if new:
+                if len(new):
+                    self.last_data = time.monotonic()
                     with self._lock:
                         for t, v in new:
                             self.times.append(t)
@@ -288,6 +290,8 @@ class Monitor:
         key = (name, filt)
         with self._lock:
             w = self.watchers.get(key)
+        if w is not None and w.alive and self._replaced(w):
+            w.stop()  # a new run publishes this name now (e.g. another pipeline): follow it
         if w is None or not w.alive:
             found = pylsl.resolve_byprop("name", name, minimum=1, timeout=0.6)
             if not found:  # normal while a pipeline is not running: not an HTTP error
@@ -297,6 +301,19 @@ class Monitor:
                 if w is None or not w.alive:
                     w = self.watchers[key] = StreamWatcher(found[0], filt=filt)
         return w.get(since, window)
+
+    @staticmethod
+    def _replaced(w: "StreamWatcher") -> bool:
+        """The watched stream went quiet and another stream with its name is running.
+        (An LSL inlet waits for its own stream to come back and never switches.)"""
+        import pylsl
+
+        now = time.monotonic()
+        if now - w.last_data < 2.0 or now - w.last_check < 2.0:
+            return False
+        w.last_check = now
+        found = pylsl.resolve_byprop("name", w.name, minimum=1, timeout=0.3)
+        return bool(found) and all(s.uid() != w.uid for s in found)
 
     def unwatch(self, name: str) -> None:
         with self._lock:
@@ -390,6 +407,7 @@ class App:
         self.pipelines_dir.mkdir(exist_ok=True)
         self.procs = ProcessManager(self.project)
         self.monitor = Monitor()
+        self.channel_cache: dict[tuple[Path, int], list[str]] = {}
 
     def safe_path(self, rel: str, must_exist: bool = False) -> Path:
         p = (self.project / rel).resolve()
@@ -441,6 +459,27 @@ class App:
                 if any(low.endswith(s) for s in RECORDING_SUFFIXES):
                     out.append(self.rel(Path(root) / f))
         return {"files": sorted(out)}
+
+    def api_channels(self, q, b):
+        """Channel names a pipeline gets from a recording (file=) or a running LSL stream (stream=),
+        for the RenameChannels table."""
+        if q.get("stream"):
+            import pylsl
+
+            from ..lsl import read_signal_info, resolve
+
+            try:
+                full = pylsl.StreamInlet(resolve(q["stream"], timeout=2.0)).info(timeout=2.0)
+            except TimeoutError:
+                raise LookupError(f"LSL stream '{q['stream']}' is not running") from None
+            return {"stream": q["stream"], "channels": read_signal_info(full)[0].ch_names}
+        from ..io import recording_channels
+
+        path = self.safe_path(q["file"], must_exist=True)
+        key = (path, path.stat().st_mtime_ns)
+        if key not in self.channel_cache:
+            self.channel_cache[key] = recording_channels(path)
+        return {"file": self.rel(path), "channels": self.channel_cache[key]}
 
     def api_processes(self, q, b):
         return {"processes": [p.summary() for p in self.procs.procs.values()]}
@@ -591,6 +630,7 @@ ROUTES = {
     ("POST", "/api/pipeline"): "api_pipeline_save",
     ("POST", "/api/validate"): "api_validate",
     ("GET", "/api/files"): "api_files",
+    ("GET", "/api/channels"): "api_channels",
     ("GET", "/api/processes"): "api_processes",
     ("POST", "/api/process/start"): "api_process_start",
     ("POST", "/api/session/start"): "api_session_start",
