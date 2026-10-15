@@ -70,7 +70,7 @@ class Graph:
     def from_yaml(cls, path: str | Path, context: RunContext | None = None,
                   overrides: dict[str, dict] | None = None) -> "Graph":
         path = Path(path)
-        spec = yaml.safe_load(path.read_text())
+        spec = yaml.safe_load(path.read_text(encoding="utf-8"))
         for nid, nspec in (overrides or {}).items():
             spec.setdefault("nodes", {})[nid] = nspec
         return cls(spec, context, base_dir=path.parent)

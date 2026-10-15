@@ -109,7 +109,7 @@ def write_lsl_config(peers: list[str], session_id: str | None = None, path: Path
     if session_id:
         lines.append(f"SessionID = {session_id}")
     lines.append("")
-    path.write_text("\n".join(lines))
+    path.write_text("\n".join(lines), encoding="utf-8")
     return path
 
 

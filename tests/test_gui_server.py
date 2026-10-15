@@ -161,3 +161,43 @@ def test_session_offline_and_errors(server):
     code, r = call(base, "/api/session/start", {"pipeline": "pipelines/f.yaml", "source": "replay",
                                                 "options": {"file": "data/missing.fif"}})
     assert code in (400, 404)
+
+
+def test_save_then_load_non_ascii(server):
+    # Windows' default file encoding is not UTF-8: pipelines must still round-trip
+    base, app = server
+    spec = {"name": "Oogbewegingen – µV → gaze", "nodes": {"src": {"type": "LSLSource"},
+            "log": {"type": "Logger"}}, "edges": ["src.signal -> log.in"]}
+    code, _ = call(base, "/api/pipeline", {"path": "pipelines/u.yaml", "spec": spec})
+    assert code == 200
+    assert "µV →" in (app.project / "pipelines" / "u.yaml").read_text(encoding="utf-8")
+    code, res = call(base, "/api/pipeline?path=pipelines/u.yaml")
+    assert code == 200 and res["spec"]["name"] == spec["name"]
+
+
+def test_stop_file_ends_process_cleanly(server):
+    # how the editor stops processes on Windows; works the same on every platform
+    base, app = server
+    code, p = call(base, "/api/process/start", {"kind": "synth", "options": {"paradigm": "alpha-bursts"}})
+    assert code == 200
+    proc = app.procs.procs[p["id"]]
+    assert not proc.stop_file.exists()
+    _wait(base, p["id"], lambda log: any("Synthetic EEG" in l for l in log["lines"]))
+    proc.stop_file.touch()
+    log = _wait(base, p["id"], lambda log: not log["running"], timeout=15)
+    assert log["lines"][-1] == "[exited with code 0]"
+    assert not proc.stop_file.exists()
+
+
+def test_session_live_training(server):
+    base, app = server
+    code, r = call(base, "/api/session/start", {"pipeline": "pipelines/motor_imagery.yaml", "source": "offline",
+                                                "options": {"file": "x"}, "train": True})
+    assert code == 400 and "streaming data" in r["error"]
+    code, r = call(base, "/api/session/start", {"pipeline": "pipelines/motor_imagery.yaml", "source": "synthetic",
+                                                "options": {"paradigm": "motor-imagery"}, "train": True})
+    assert code == 200 and r["run"]["kind"] == "train"
+    assert r["run"]["args"][:3] == ["train", "pipelines/motor_imagery.yaml", "--live"]
+    assert r["run"]["label"].startswith("train motor_imagery")
+    call(base, "/api/process/stop", {"id": r["source"]["id"]})  # linked: stops the training too
+    _wait(base, r["run"]["id"], lambda log: not log["running"])

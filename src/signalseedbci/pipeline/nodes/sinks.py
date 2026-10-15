@@ -242,7 +242,8 @@ class Recorder(Node):
         return {}
 
     def close(self):
-        if not self.chunks or self.context.mode == "train":
+        # training from files replays existing data; live calibration is new data worth keeping
+        if not self.chunks or (self.context.mode == "train" and not self.context.realtime):
             return
         import mne
 

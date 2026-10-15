@@ -1097,10 +1097,8 @@ async function ensureSaved() {
   return save();
 }
 
-async function run() {
-  if (!(await ensureSaved())) return;
-  await validate();
-  if (S.validation.errors.length) return toast("Fix the validation errors first", true);
+// Start the toolbar's data source together with the pipeline: a run, or (train) a live calibration
+async function startSession(train = false) {
   const source = $("#dataSource").value, detail = $("#dataDetail").value;
   const options = {};
   if (needsFile(source)) {
@@ -1109,15 +1107,23 @@ async function run() {
   }
   if (source === "synthetic") options.paradigm = detail;
   try {
-    const r = await api("/api/session/start", { pipeline: S.path, source, options });
+    const r = await api("/api/session/start", { pipeline: S.path, source, options, train });
     S.runProcId = r.run.id;
     S.activeProc = r.run.id;
     S.logSince[r.run.id] = 0;
     for (const w of r.warnings) toast(w, true, 7000);
+    if (train) toast("Calibrating: give the cues, then press ■ Stop to train", false, 6000);
     showTab("console");
     await pollProcs();
     if (monitorVisible()) setTimeout(refreshStreams, 2000);
   } catch (e) { toast(e.message, true); }
+}
+
+async function run() {
+  if (!(await ensureSaved())) return;
+  await validate();
+  if (S.validation.errors.length) return toast("Fix the validation errors first", true);
+  return startSession(false);
 }
 
 async function train() {
@@ -1126,14 +1132,29 @@ async function train() {
   if (![...S.nodes.values()].some((n) => n.type === "Classifier")) {
     return toast("This pipeline has no Classifier node to train", true);
   }
+  if (S.runProcId != null && S.procs.find((p) => p.id === S.runProcId)?.running) {
+    return toast("Stop the current run first", true);
+  }
   await refreshFiles();
+  const source = $("#dataSource"), liveOk = source.value !== "offline";
+  const dataLabel = source.selectedOptions[0].textContent
+    + (needsFile(source.value) || source.value === "synthetic" ? ` › ${$("#dataDetail").selectedOptions[0]?.textContent || ""}` : "");
+  const modeLive = el("input", { type: "radio", name: "trainMode", value: "live", disabled: !liveOk });
+  const modeFiles = el("input", { type: "radio", name: "trainMode", value: "files" });
+  (liveOk && !S.files.length ? modeLive : modeFiles).checked = true;
   const checks = S.files.map((f) => el("label", {}, el("input", { type: "checkbox", value: f }), f));
   const body = [
-    el("p", { class: "muted" }, "The pipeline runs offline over these recordings and fits every Classifier node on the labelled epochs."),
-    S.files.length ? el("div", { class: "file-checks" }, ...checks)
+    el("label", { class: "train-mode" }, modeFiles, el("b", {}, "Recordings"),
+      el("span", { class: "muted" }, "Run the pipeline offline over the ticked files and fit every Classifier on the labelled epochs.")),
+    S.files.length ? el("div", { class: "file-checks", onchange: () => { modeFiles.checked = true; } }, ...checks)
       : el("div", { class: "msg warn" }, "No recordings in the project. Use Data › Replay a recording › ＋ Create synthetic recording, or copy BDF files into data/."),
+    el("label", { class: "train-mode" }, modeLive, el("b", {}, "Live session"),
+      el("span", { class: "muted" }, liveOk
+        ? `Calibrate now on ${dataLabel}: present the cues, then press ■ Stop. The classifiers are fitted and the raw session is saved in data/ for retraining.`
+        : "Needs streaming data: choose a Data source other than “Recording, offline”.")),
   ];
   if (!(await modal("Train classifiers", body, "Train"))) return;
+  if (modeLive.checked) return startSession(true);
   const files = checks.map((c) => c.querySelector("input")).filter((i) => i.checked).map((i) => i.value);
   if (!files.length) return toast("Select at least one recording", true);
   try {
@@ -1180,7 +1201,7 @@ async function pollProcs() {
     $("#btnRun").hidden = running;
     $("#dataSource").disabled = $("#dataDetail").disabled = running;
     $("#runStatus").hidden = !running;
-    if (running) { $("#runStatus").textContent = "● running"; $("#runStatus").title = run.label; }
+    if (running) { $("#runStatus").textContent = run.kind === "train" ? "● calibrating" : "● running"; $("#runStatus").title = run.label; }
   } catch { /* server gone */ }
 }
 

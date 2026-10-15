@@ -19,6 +19,7 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -49,11 +50,16 @@ class ManagedProcess:
         self.n_lines = 0  # total lines ever produced (for incremental reads)
         self.started = time.time()
         self.on_exit: list = []  # callbacks run when the process ends (linked session processes)
-        env = dict(os.environ, PYTHONUNBUFFERED="1")
+        # Stop request on Windows: CTRL_BREAK only reaches a child sharing the editor's console
+        self.stop_file = Path(tempfile.gettempdir()) / f"signalseedbci-stop-{os.getpid()}-{pid}-{time.time_ns()}"
+        self.stop_file.unlink(missing_ok=True)
+        # UTF-8 both ways: Windows pipes default to the ANSI code page, which can't print 'µ', '→', ...
+        env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8",
+                   SIGNALSEEDBCI_STOP_FILE=str(self.stop_file))
         flags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
         self.popen = subprocess.Popen([sys.executable, "-u", "-m", "signalseedbci", *args], cwd=cwd,
-                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                      bufsize=1, env=env, creationflags=flags)
+                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf-8",
+                                      errors="replace", bufsize=1, env=env, creationflags=flags)
         self._append(f"$ signalseedbci {' '.join(args)}")
         threading.Thread(target=self._read, daemon=True).start()
 
@@ -68,6 +74,7 @@ class ManagedProcess:
                 continue  # liblsl start-up chatter
             self._append(line)
         code = self.popen.wait()
+        self.stop_file.unlink(missing_ok=True)
         self._append(f"[exited with code {code}]")
         for cb in self.on_exit:
             try:
@@ -82,14 +89,17 @@ class ManagedProcess:
     def stop(self) -> None:
         if not self.running:
             return
-        # SIGINT lets the pipeline close cleanly (e.g. the Recorder saves its file)
+        # an interrupt lets the pipeline close cleanly (e.g. the Recorder saves its file)
         if sys.platform == "win32":
-            self.popen.send_signal(signal.CTRL_BREAK_EVENT)
+            self.stop_file.touch()  # the command interrupts itself (cli._watch_stop_file)
         else:
             self.popen.send_signal(signal.SIGINT)
 
+        # after Stop, live training still saves the session and fits the classifier
+        grace = 300 if self.kind == "train" else 4
+
         def _kill_later():
-            time.sleep(4)
+            time.sleep(grace)
             if self.running:
                 self.popen.kill()
         threading.Thread(target=_kill_later, daemon=True).start()
@@ -405,15 +415,15 @@ class App:
 
     def api_pipeline_get(self, q, b):
         path = self.safe_path(q["path"], must_exist=True)
-        return {"path": self.rel(path), "spec": yaml.safe_load(path.read_text()) or {}}
+        return {"path": self.rel(path), "spec": yaml.safe_load(path.read_text(encoding="utf-8")) or {}}
 
     def api_pipeline_save(self, q, b):
         path = self.safe_path(b["path"])
         if path.suffix not in (".yaml", ".yml"):
             path = path.with_suffix(".yaml")
-        previous = path.read_text() if path.exists() else ""
+        previous = path.read_text(encoding="utf-8") if path.exists() else ""
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(dump_pipeline(b["spec"], previous))
+        path.write_text(dump_pipeline(b["spec"], previous), encoding="utf-8")
         return {"path": self.rel(path)}
 
     def api_validate(self, q, b):
@@ -482,16 +492,21 @@ class App:
 
     def api_session_start(self, q, b):
         """Start the data source the toolbar selected (if it is a simulation) and the
-        pipeline together. They are linked: when one ends, the other is stopped."""
+        pipeline together. They are linked: when one ends, the other is stopped.
+        With ``train: true`` the pipeline calibrates on the live streams instead
+        (``train --live``) and fits its classifiers when stopped."""
         from .. import DEFAULT_EEG_STREAM, DEFAULT_MARKER_STREAM
 
         path = self.safe_path(b["pipeline"], must_exist=True)
         pipe = self.rel(path)
         source = b.get("source", "live")
         o = b.get("options") or {}
+        train = bool(b.get("train"))
         if source not in self.SOURCES:
             raise ValueError(f"Unknown data source {source!r}")
-        spec = yaml.safe_load(path.read_text()) or {}
+        if train and source == "offline":
+            raise ValueError("Live training needs streaming data; to train on a recording, tick it in the file list")
+        spec = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         lsl = next(((n.get("params") or {}) for n in (spec.get("nodes") or {}).values()
                     if n.get("type") == "LSLSource"), None)
         warnings, src_args, src_label = [], None, None
@@ -522,7 +537,7 @@ class App:
             else:
                 src_args = ["bridge", "biosemi", "--fake", "--channels", "32", "--fake-preset", "biosemi32", *names]
                 src_label = "simulated ActiveTwo"
-        run_args = ["run", pipe]
+        run_args = ["train", pipe, "--live"] if train else ["run", pipe]
         if source == "offline":
             rec = self.rel(self.safe_path(o.get("file") or "", must_exist=True))
             run_args += ["--offline", rec]
@@ -531,7 +546,8 @@ class App:
             what = src_label or "live LSL"
         session = int(time.time() * 1000)
         src = self.procs.start(src_label, "source", src_args) if src_args else None
-        run = self.procs.start(f"{Path(pipe).stem} · {what}", "run", run_args)
+        run = self.procs.start(f"{'train ' if train else ''}{Path(pipe).stem} · {what}",
+                               "train" if train else "run", run_args)
         for proc in (src, run):
             if proc is not None:
                 proc.session = session

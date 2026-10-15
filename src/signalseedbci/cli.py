@@ -12,6 +12,7 @@ Simulation (no amplifier):
 
 Processing (Mac):
   signalseedbci train pipeline.yaml --data rec.bdf    fit the classifier(s) offline
+  signalseedbci train pipeline.yaml --live            calibrate on live LSL until stopped, then fit
   signalseedbci run pipeline.yaml                     run online on live LSL streams
   signalseedbci run pipeline.yaml --replay rec.bdf    simulate online, real-time pacing
   signalseedbci run pipeline.yaml --offline rec.bdf   pseudo-online evaluation, fast
@@ -29,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -129,13 +131,13 @@ def cmd_discover(args) -> None:
 def cmd_lsl_config(args) -> None:
     from .lsl import write_lsl_config
     path = write_lsl_config(args.peers, args.session_id, args.path)
-    print(f"Wrote {path}:\n{path.read_text()}")
+    print(f"Wrote {path}:\n{path.read_text(encoding='utf-8')}")
     print("Use the same file (same SessionID) on every machine, then restart LSL programs.")
 
 
 def _source_override(graph_path: str, data: str, source_node: str | None, realtime: bool) -> dict:
     import yaml
-    spec = yaml.safe_load(Path(graph_path).read_text())
+    spec = yaml.safe_load(Path(graph_path).read_text(encoding="utf-8"))
     nodes = spec.get("nodes") or {}
     if source_node is None:
         candidates = [n for n, s in nodes.items() if s.get("type") in ("LSLSource", "FileSource")]
@@ -162,13 +164,48 @@ def cmd_run(args) -> None:
         print("Accuracy:", {k: round(v, 3) for k, v in ctx.store["accuracy"].items()})
 
 
+def _live_calibration_graph(pipeline: str, ctx, source_node: str | None, save_raw: str | None):
+    """The pipeline on its live LSL source, plus a Recorder that keeps the raw source
+    signal and markers, so the session can be retrained later with --data."""
+    import yaml
+
+    from .pipeline import Graph
+    path = Path(pipeline)
+    spec = yaml.safe_load(path.read_text(encoding="utf-8"))
+    nodes = spec.get("nodes") or {}
+    if source_node is None:
+        candidates = [n for n, s in nodes.items() if s.get("type") == "LSLSource"]
+        if len(candidates) != 1:
+            raise SystemExit(f"Live training needs exactly one LSLSource ({candidates}); use --source-node")
+        source_node = candidates[0]
+    if save_raw:
+        rec = "calibration_recording"
+        nodes[rec] = {"type": "Recorder", "params": {"path": str(Path(save_raw).resolve())}}
+        spec.setdefault("edges", []).extend([f"{source_node}.signal -> {rec}.in",
+                                             f"{source_node}.markers -> {rec}.markers"])
+    return Graph(spec, ctx, base_dir=path.parent)
+
+
 def cmd_train(args) -> None:
     from .pipeline import Graph, RunContext
-    ctx = RunContext(mode="train", realtime=False)
-    for data in args.data:
-        print(f"== {data}")
-        graph = Graph.from_yaml(args.pipeline, ctx, _source_override(args.pipeline, data, args.source_node, False))
-        graph.run(verbose=False)
+    if args.live:
+        ctx = RunContext(mode="train", realtime=True)
+        save_raw = None
+        if not args.no_save:
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            save_raw = args.save_raw or f"data/calib_{Path(args.pipeline).stem}_{stamp}_raw.fif"
+        graph = _live_calibration_graph(args.pipeline, ctx, args.source_node, save_raw)
+        print("Live calibration: collecting labelled epochs"
+              + (f" for {args.duration:g} s" if args.duration else "; stop (Ctrl+C / Stop) to train"))
+        graph.run(duration=args.duration)
+        if save_raw:
+            print(f"Raw calibration data: {save_raw} (retrain later with --data {save_raw})")
+    else:
+        ctx = RunContext(mode="train", realtime=False)
+        for data in args.data:
+            print(f"== {data}")
+            graph = Graph.from_yaml(args.pipeline, ctx, _source_override(args.pipeline, data, args.source_node, False))
+            graph.run(verbose=False)
     classifiers = ctx.store.get("classifiers", {})
     if not classifiers:
         raise SystemExit("The pipeline has no Classifier node")
@@ -276,7 +313,14 @@ def build_parser() -> argparse.ArgumentParser:
             p.add_argument("--duration", type=float)
             p.add_argument("--tick", type=float, default=0.02, help="Seconds per processing tick")
         else:
-            p.add_argument("--data", nargs="+", required=True, help="Training recording(s)")
+            g = p.add_mutually_exclusive_group(required=True)
+            g.add_argument("--data", nargs="+", help="Training recording(s)")
+            g.add_argument("--live", action="store_true",
+                           help="Calibrate on the live LSL streams until stopped (or --duration), then train")
+            p.add_argument("--duration", type=float, help="--live: stop after N seconds")
+            p.add_argument("--save-raw", help="--live: where to save the raw session "
+                                              "(default: data/calib_<pipeline>_<time>_raw.fif)")
+            p.add_argument("--no-save", action="store_true", help="--live: do not save the raw session")
         p.set_defaults(func=func)
 
     gu = sub.add_parser("gui", help="Graphical pipeline editor (opens the browser)")
@@ -294,7 +338,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _enable_interrupts() -> None:
     """Make Ctrl+C / the editor's Stop end every command cleanly (KeyboardInterrupt), so
     pipelines close their nodes (e.g. Recorder saves). Processes started in the background
-    inherit an *ignored* SIGINT, and on Windows the editor sends CTRL_BREAK instead."""
+    inherit an *ignored* SIGINT, and Ctrl+Break in a Windows console sends SIGBREAK."""
     import signal
 
     signal.signal(signal.SIGINT, signal.default_int_handler)
@@ -302,8 +346,27 @@ def _enable_interrupts() -> None:
         signal.signal(signal.SIGBREAK, signal.default_int_handler)
 
 
+def _watch_stop_file() -> None:
+    """The editor asks a command to stop by creating the file named in
+    SIGNALSEEDBCI_STOP_FILE (on Windows, where signals need a shared console). The
+    command then gets the same KeyboardInterrupt as from Ctrl+C, once."""
+    path = os.environ.get("SIGNALSEEDBCI_STOP_FILE")
+    if not path:
+        return
+    import _thread
+    import threading
+
+    def watch():
+        while not os.path.exists(path):
+            time.sleep(0.2)
+        _thread.interrupt_main()
+
+    threading.Thread(target=watch, daemon=True).start()
+
+
 def main(argv: list[str] | None = None) -> None:
     _enable_interrupts()
+    _watch_stop_file()
     args = build_parser().parse_args(argv)
     try:
         import mne
