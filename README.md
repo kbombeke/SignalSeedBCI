@@ -7,8 +7,7 @@
 
 <h1 align="center">SignalSeedBCI</h1>
 
-Build, simulate and run brain–computer interface (BCI) experiments on macOS or Windows, with a
-**BioSemi ActiveTwo** amplifier or without any hardware.
+Build, simulate and run brain–computer interface (BCI) applications on macOS or Windows, with and without any hardware.
 
 - **Visual pipeline editor** in the browser: drag processing steps onto a canvas,
   connect them, press Run, and watch the signals, spectra, classifier output and
