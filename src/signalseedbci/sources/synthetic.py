@@ -6,6 +6,9 @@ Paradigms:
 - ``alpha-bursts``: posterior alpha alternates between low and high, e.g. 10 s of
   strong alpha every 20 s; code 1 marks burst onset, code 2 burst offset. Useful to
   check visualisations and alpha neurofeedback pipelines.
+- ``blinks``: eye blinks every 2-5 s (code 1 at each blink onset). A blink is a large,
+  ~0.35 s positive deflection at the frontal electrodes (Fp1/Fp2, as in a vertical EOG
+  channel), fading towards the back of the head. For blink-controlled pipelines.
 
 The signal mimics raw ActiveTwo data: large per-channel DC offsets and a
 common-mode component (CMS/DRL, line noise) on top of 1/f background, a posterior
@@ -44,7 +47,7 @@ class _Oscillator:
         return np.clip(env, 0.1, None) * np.sin(phases)
 
 
-PARADIGMS = ("motor-imagery", "alpha-bursts")
+PARADIGMS = ("motor-imagery", "alpha-bursts", "blinks")
 
 
 class SyntheticEEG:
@@ -59,7 +62,8 @@ class SyntheticEEG:
                  noise_uv: float = 6.0, mu_uv: float = 12.0, alpha_uv: float = 8.0,
                  line_freq: float = 50.0, line_uv: float = 40.0, dc_offset_uv: float = 15000.0,
                  paradigm: str = "motor-imagery", burst_s: float = 10.0, period_s: float = 20.0,
-                 alpha_low: float = 0.3, alpha_high: float = 3.0):
+                 alpha_low: float = 0.3, alpha_high: float = 3.0, blink_uv: float = 250.0,
+                 blink_interval_s: tuple[float, float] = (2.0, 5.0)):
         import mne
 
         if paradigm not in PARADIGMS:
@@ -89,6 +93,11 @@ class SyntheticEEG:
         self.w_mu_left = spread("C3", 0.03) * mu_uv
         self.w_mu_right = spread("C4", 0.03) * mu_uv
         self.w_alpha = spread("Oz", 0.05) * alpha_uv
+        self.w_blink = np.maximum(spread("Fp1", 0.04), spread("Fp2", 0.04)) * blink_uv
+        self.blink_interval = blink_interval_s
+        self.next_blink = int(1.5 * self.sfreq)  # first blink after 1.5 s
+        self.blinks: list[tuple[int, float]] = []  # (start sample, amplitude factor)
+        self.blink_n = int(0.35 * self.sfreq)
         self.mu_left = _Oscillator(11.0, self.sfreq, self.rng)
         self.mu_right = _Oscillator(11.5, self.sfreq, self.rng)
         self.alpha = _Oscillator(10.0, self.sfreq, self.rng, env_tau_s=1.0)
@@ -136,10 +145,31 @@ class SyntheticEEG:
         events += [(int(i), 2) for i in np.flatnonzero((phase == 0) & (idx > 0))]
         return gain, sorted(events)
 
+    def _blinks(self, n: int) -> tuple[np.ndarray, list[tuple[int, int]]]:
+        """Blink waveform (0..~1.3) and blink onset events for the next n samples."""
+        events = []
+        while self.next_blink < self.sample + n:
+            events.append((self.next_blink - self.sample, 1))
+            self.blinks.append((self.next_blink, float(self.rng.uniform(0.7, 1.3))))
+            self.next_blink += int(self.rng.uniform(*self.blink_interval) * self.sfreq)
+        idx = self.sample + np.arange(n)
+        wave = np.zeros(n)
+        for start, amp in self.blinks:
+            u = (idx - start) / self.blink_n
+            m = (u >= 0) & (u < 1)
+            wave[m] += amp * np.sin(np.pi * u[m] ** 0.7) ** 2  # fast closing, slower opening
+        self.blinks = [b for b in self.blinks if b[0] + self.blink_n > self.sample + n]
+        return wave, events
+
     def next(self, n: int) -> tuple[np.ndarray, list[tuple[int, int]]]:
+        blink = None
         if self.paradigm == "alpha-bursts":
             alpha_gain, events = self._alpha_gain(n)
             self.next_cue = self.sample + n + 1  # no motor-imagery cues
+        elif self.paradigm == "blinks":
+            alpha_gain = 1.0
+            blink, events = self._blinks(n)
+            self.next_cue = self.sample + n + 1
         else:
             alpha_gain, events = 1.0, []
         while self.next_cue < self.sample + n:
@@ -160,6 +190,8 @@ class SyntheticEEG:
         data += np.outer(self.w_mu_left, self.mu_left.next(n) * self._envelope("right", n))
         data += np.outer(self.w_mu_right, self.mu_right.next(n) * self._envelope("left", n))
         data += np.outer(self.w_alpha, self.alpha.next(n) * alpha_gain)
+        if blink is not None:
+            data += np.outer(self.w_blink, blink)
 
         t = (self.sample + np.arange(n)) / self.sfreq
         common = self.line_uv * np.sin(2 * np.pi * self.line_freq * t) + 30 * np.sin(2 * np.pi * 0.05 * t)

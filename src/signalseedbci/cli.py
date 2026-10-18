@@ -272,8 +272,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--names-1020", action="store_true", help="10-20 channel names instead of A1..")
     s.add_argument("--duration", type=float, help="Seconds (streaming: stop after; --record: length)")
     s.add_argument("--record", help="Write a .fif recording instead of streaming")
-    s.add_argument("--paradigm", default="motor-imagery", choices=["motor-imagery", "alpha-bursts"],
-                   help="motor-imagery: left/right cues 1/2; alpha-bursts: alpha on (1) / off (2)")
+    s.add_argument("--paradigm", default="motor-imagery", choices=["motor-imagery", "alpha-bursts", "blinks"],
+                   help="motor-imagery: left/right cues 1/2; alpha-bursts: alpha on (1) / off (2); "
+                        "blinks: eye blinks every 2-5 s at Fp1/Fp2 (1 at each blink)")
     s.add_argument("--burst-s", type=float, default=10.0, help="alpha-bursts: burst length (s)")
     s.add_argument("--period-s", type=float, default=20.0, help="alpha-bursts: one burst every N s")
     s.set_defaults(func=cmd_synth)

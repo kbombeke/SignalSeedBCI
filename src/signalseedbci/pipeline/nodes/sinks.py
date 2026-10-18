@@ -180,6 +180,29 @@ class GazeFeedback(PredictionOut):
     }
 
 
+class RunnerGame(PredictionOut):
+    """BCI showcase: Emu Runner, a black-and-white platform game. The emu keeps running; the
+    prediction ``jump_label`` (e.g. a detected blink) makes it jump over rocks and logs,
+    picking up seeds on the way. Shown live in the editor node; ⧉ opens a full-size window
+    for the participant. The score 'cleared x/y' shows how often the decoded jumps came in
+    time. Predictions are published as LSL (JSON)."""
+
+    category = "outputs"
+    title = "Emu Runner"
+    params = {
+        "name": Param("signalseedbci-runner", "str", "LSL stream name for the predictions shown"),
+        "jump_label": Param("blink", "str", "Prediction label that makes the emu jump "
+                            "(e.g. 'blink' from the Blink Detector, 'left' for left-hand imagery)"),
+        "trigger": Param("every", "choice", "'every': jump on every jump_label prediction (events such as "
+                         "blinks, or one prediction per trial); 'change': jump when a continuous decision "
+                         "changes to jump_label (e.g. a ThresholdClassifier)", choices=["every", "change"]),
+        "min_proba": Param(0.0, "float", "Only jump when the probability of jump_label is at least this (0 = any)"),
+        "assist": Param(True, "bool", "Hold a jump command for up to 2.5 s and jump at the right moment for the "
+                        "next obstacle (makes slow BCI decisions playable)"),
+        "crossing_s": Param(4.0, "float", "Seconds an obstacle takes to cross the screen (higher = slower, easier)"),
+    }
+
+
 class Logger(Node):
     """Print what arrives; for predictions with known true labels, running accuracy."""
 

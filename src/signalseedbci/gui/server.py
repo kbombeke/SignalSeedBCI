@@ -33,7 +33,7 @@ import numpy as np
 import yaml
 
 STATIC = Path(__file__).parent / "static"
-PARADIGMS = ("motor-imagery", "alpha-bursts")
+PARADIGMS = ("motor-imagery", "alpha-bursts", "blinks")
 RECORDING_SUFFIXES = {".bdf", ".edf", ".gdf", ".fif", ".xdf", ".vhdr", ".set", ".fif.gz"}
 SKIP_DIRS = {".venv", "venv", ".git", "__pycache__", "node_modules", ".pytest_cache"}
 

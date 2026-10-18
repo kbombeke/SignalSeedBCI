@@ -122,7 +122,7 @@ No hardware needed:
   |---|---|
   | Amplifier / bridge (live) | the pipeline on the live LSL streams |
   | Replay a recording | the recording as LSL streams (looping) + the pipeline |
-  | Synthetic EEG | synthetic motor-imagery or alpha EEG + the pipeline |
+  | Synthetic EEG | synthetic EEG (motor imagery, alpha bursts or eye blinks) + the pipeline |
   | Simulated ActiveTwo | a simulated amplifier through the real BioSemi decoder + the pipeline |
   | Recording, offline | the pipeline over the file as fast as possible (evaluation) |
 
@@ -200,9 +200,19 @@ edges:
 | Preprocessing | `PickChannels`, `RenameChannels`, `Rereference`, `BandpassFilter`, `NotchFilter`, `Decimate` |
 | Epoching | `Epocher` (around markers), `SlidingWindow` (continuous decoding) |
 | Features | `BandPower`, `TimeWindowMeans` |
-| Classification | `Classifier` (`csp_lda`, `ts_lr`, `mdm`, `xdawn_ts_lr`, `lda`, or your own), `ThresholdClassifier` (high/low on one feature, self-calibrating, no training) |
-| Outputs | **Data Visualizer** (`DataVisualizer`: live plot + LSL stream), `SpectrumOut`, `EyesFeedback`, `GazeFeedback`, `PredictionOut` (JSON predictions over LSL), `Recorder` (.fif), `Logger` |
+| Classification | `Classifier` (`csp_lda`, `ts_lr`, `mdm`, `xdawn_ts_lr`, `lda`, or your own), `ThresholdClassifier` (high/low on one feature, self-calibrating, no training), **Blink Detector** (`BlinkDetector`: a `blink` prediction per eye blink in frontal/EOG channels, adaptive threshold, no training) |
+| Outputs | **Data Visualizer** (`DataVisualizer`: live plot + LSL stream), `SpectrumOut`, `EyesFeedback`, `GazeFeedback`, **Emu Runner** (`RunnerGame`, below), `PredictionOut` (JSON predictions over LSL), `Recorder` (.fif), `Logger` |
 | Scripting | `SignalScript`, `EpochScript` (see [Extending it with Python](#extending-it-with-python)) |
+
+**Emu Runner**: a BCI showcase, a black-and-white platform game. An emu keeps running through
+the outback; a decoded action (`jump_label`, by default `blink` from the Blink Detector, or e.g.
+`left` from a motor-imagery Classifier) makes it leap over rocks and logs and pick up the seeds
+above them. `trigger: every` jumps on each such prediction (events such as blinks, or one
+prediction per trial); `change` when a continuous decision switches to that label. **Assist**
+(on by default) holds a command for up to 2.5 s and fires it at the right moment for the next
+obstacle, which makes the reaction time of a BCI playable. *Cleared x/y* doubles as a score of
+how often the decoded jumps came in time. ⧉ opens a full-screen window for the participant,
+with a space-bar test mode.
 
 **Examples** in `pipelines/`:
 
@@ -211,6 +221,7 @@ edges:
 | `eyes_alpha.yaml` | Eyes close when posterior alpha is high, open when low (no training) |
 | `alpha_neurofeedback.yaml` | Relative alpha power and a live spectrum as LSL streams |
 | `motor_imagery.yaml` | Left vs right hand imagery with CSP + LDA (train first) |
+| `blink_runner.yaml` | Emu Runner: blink to make the emu jump (Blink Detector on Fp1/Fp2, no training) |
 | `Exp2_replay_attempt1.yaml` | In-ear EOG from a recorded session: mastoid reference, 128 Hz, 10 Hz low-pass, live plot |
 
 ## Command line
@@ -223,7 +234,7 @@ edges:
 | `run P.yaml [--replay REC \| --offline REC]` | Run a pipeline on live LSL, a file in real time, or a file as fast as possible |
 | `train P.yaml --data REC… \| --live` | Fit the pipeline's classifiers |
 | `replay REC [--loop]` | Publish a recording as LSL streams |
-| `synth [--paradigm alpha-bursts] [--record FILE]` | Stream synthetic EEG, or write a synthetic recording |
+| `synth [--paradigm alpha-bursts\|blinks] [--record FILE]` | Stream synthetic EEG, or write a synthetic recording |
 | `bridge biosemi \| actiview` | BioSemi ActiveTwo → LSL (see below) |
 | `discover [--check]` | List LSL streams on the network |
 | `lsl-config --peers IP…` | Configure LSL for networks where discovery fails |

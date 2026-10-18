@@ -1,0 +1,57 @@
+# BCI showcase: Emu Runner, controlled by eye blinks. The emu keeps running; blink to make
+# it jump over the rocks and logs. A blink is a large, short deflection at the frontal
+# electrodes (Fp1/Fp2, or a vertical EOG channel); the Blink Detector needs no training and
+# adapts its threshold to the person. Cue markers '1' (as in the synthetic data) are only
+# used to report how many blinks were caught.
+#
+#   try it without hardware: Data > Synthetic EEG > Eye blinks (a blink every 2-5 s),
+#   or Replay a recording > Create synthetic recording > Eye blinks.
+#   ⧉ on the 'game' node opens a full-screen window for the participant.
+name: Emu Runner (blinks)
+
+nodes:
+  src:
+    type: LSLSource
+    params: {signal_name: BioSemi, marker_name: BioSemi-Triggers}
+  names:
+    type: RenameChannels
+    params: {preset: biosemi32}
+  car:
+    type: Rereference
+    params: {ref: average}
+  frontal:
+    type: PickChannels
+    params: {include: [Fp1, Fp2, AF3, AF4]}
+  down:
+    type: Decimate
+    params: {target_sfreq: 128}
+  blink:
+    type: BlinkDetector
+    params: {channels: [Fp1, Fp2], truth: ['1']}
+  game:
+    type: RunnerGame
+    params: {jump_label: blink, trigger: every}
+  eog:
+    type: DataVisualizer
+    params: {name: signalseedbci-frontal, type: EOG, display: highpass}
+
+edges:
+  - src.signal -> names.in
+  - names.out -> car.in
+  - car.out -> frontal.in
+  - frontal.out -> down.in
+  - down.out -> blink.in
+  - src.markers -> blink.markers
+  - blink.out -> game.in
+  - down.out -> eog.in
+  - src.markers -> eog.markers
+
+layout:  # node positions in the editor: [x, y] or [x, y, width, view height]
+  src: [30, 30]
+  names: [280, 30]
+  car: [530, 30]
+  frontal: [780, 30]
+  down: [1030, 30]
+  blink: [30, 230]
+  game: [300, 230, 640, 300]
+  eog: [1000, 230, 460, 300]

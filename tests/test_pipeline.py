@@ -99,6 +99,52 @@ def test_graph_rejects_bad_connections():
         Graph({"nodes": {"x": {"type": "BandpassFilter", "params": {"lfreq": 1}}}})
 
 
+def test_blink_runner_detects_blinks_and_feeds_the_game(tmp_path):
+    import json
+    import uuid
+
+    import pylsl
+
+    rec = tmp_path / "blinks_raw.fif"
+    SyntheticEEG(seed=3, paradigm="blinks").make_raw(120).save(rec, verbose="error")
+    spec = yaml.safe_load(open("pipelines/blink_runner.yaml", encoding="utf-8"))
+    name = f"runner-test-{uuid.uuid4().hex[:6]}"
+    spec["nodes"]["game"]["params"]["name"] = name
+    spec["nodes"]["eog"]["params"]["name"] = f"eog-{name}"
+    p = tmp_path / "runner.yaml"
+    p.write_text(yaml.safe_dump(spec))
+    ctx = RunContext(mode="online", realtime=False)
+    graph = Graph.from_yaml(p, ctx, _source(rec))
+    graph.setup()
+    inlet = pylsl.StreamInlet(pylsl.resolve_byprop("name", name, timeout=5)[0])
+    inlet.open_stream(timeout=5)
+    while graph.tick() or not graph.nodes["src"].finished:
+        pass
+    graph.close()
+    blink = graph.nodes["blink"]
+    cued = blink.n_hit + blink.n_miss
+    assert cued >= 25 and blink.n_hit / cued > 0.9 and blink.n_extra <= 2  # blinks every 2-5 s
+    sent = [json.loads(v[0])["label"] for v in inlet.pull_chunk(timeout=1.0, max_samples=10000)[0]]
+    assert set(sent) == {"blink"} and len(sent) == blink.n_blinks  # every blink reaches the game
+
+
+def test_blink_detector_ignores_signal_without_blinks():
+    from signalseedbci.pipeline.nodes.classify import BlinkDetector
+
+    rng = np.random.default_rng(0)
+    info = SignalInfo(["Fp1", "Fp2"], 128.0)
+    node = BlinkDetector("b", {})
+    node.setup({"in": info})
+    t = np.arange(128 * 30) / 128.0
+    data = 20 * rng.standard_normal((2, t.size)) + 3000  # noise on a large DC offset
+    out = []
+    for i in range(0, t.size, 13):
+        out += node.process({"in": [SignalChunk(data[:, i:i + 13], t[i:i + 13])], "markers": []})["out"]
+    assert len(out) <= 1
+    with pytest.raises(ValueError, match="none of the channels"):
+        BlinkDetector("b", {"channels": ["VEOG"]}).setup({"in": info})
+
+
 def test_renamed_node_type_still_loads():
     from signalseedbci.pipeline import REGISTRY
     from signalseedbci.pipeline.nodes.sinks import DataVisualizer
@@ -279,12 +325,15 @@ EXP2_CHANNELS = (["R_CAN_1", "R_CON_1", "R_CAN_2", "R_CON_2", "R_CAN_3", "R_CON_
                   "L_MASTOID", "R_MASTOID", "L_EARLOBE", "R_EARLOBE"] + [f"A{i}" for i in range(17, 33)])
 
 
-def _exp2_spec(tmp_path):
-    """The Exp2 pipeline with a unique output name and a Recorder on what it publishes."""
+def _exp2_spec(tmp_path, rec):
+    """The Exp2 pipeline reading ``rec`` (in place of its LSLSource, whatever its node id), with a
+    unique output name and a Recorder on what it publishes."""
     spec = yaml.safe_load(open(EXP2, encoding="utf-8"))
+    src = next(nid for nid, n in spec["nodes"].items() if n["type"] == "LSLSource")
+    spec["nodes"][src] = {"type": "FileSource", "params": {"path": str(rec)}}
     spec["nodes"]["eog"]["params"]["name"] += f"-test-{tmp_path.name[-6:]}"
     spec["nodes"]["rec"] = {"type": "Recorder", "params": {"path": str(tmp_path / "out_raw.fif")}}
-    spec["edges"] += ["lowpass.out -> rec.in", "src.markers -> rec.markers"]
+    spec["edges"] += ["lowpass.out -> rec.in", f"{src}.markers -> rec.markers"]
     p = tmp_path / "exp2.yaml"
     p.write_text(yaml.safe_dump(spec))
     return p
@@ -305,7 +354,7 @@ def test_exp2_replay_pipeline(tmp_path):
     rec = tmp_path / "exp2_raw.fif"
     mne.io.RawArray(np.vstack([(own + common) * 1e-6, stim]), info, verbose="error").save(rec, verbose="error")
 
-    Graph.from_yaml(_exp2_spec(tmp_path), RunContext(mode="online", realtime=False), _source(rec)).run(verbose=False)
+    Graph.from_yaml(_exp2_spec(tmp_path, rec), RunContext(mode="online", realtime=False)).run(verbose=False)
     out = mne.io.read_raw(tmp_path / "out_raw.fif", preload=True, verbose="error")
     assert out.info["sfreq"] == 128.0
     assert out.ch_names == [c for c in EXP2_CHANNELS if c != "L_MASTOID"]  # referenced to it, then dropped
@@ -320,7 +369,7 @@ def test_exp2_replay_pipeline(tmp_path):
 @pytest.mark.skipif(not list(Path("data").glob("*.bdf")), reason="no BDF recording in data/")
 def test_exp2_pipeline_accepts_the_recorded_session(tmp_path):
     rec = sorted(Path("data").glob("*.bdf"))[0].resolve()
-    graph = Graph.from_yaml(_exp2_spec(tmp_path), RunContext(mode="online", realtime=False), _source(rec))
+    graph = Graph.from_yaml(_exp2_spec(tmp_path, rec), RunContext(mode="online", realtime=False))
     graph.setup()
     assert graph.meta[("lowpass", "out")].sfreq == 128.0
     assert "L_MASTOID" not in graph.meta[("lowpass", "out")].ch_names

@@ -236,3 +236,130 @@ class ThresholdClassifier(Node):
         if self.n_known:
             self.log(f"final: decision matched the marked state {self.n_ok / self.n_known:.1%} of {self.n_known} updates")
             self.context.store.setdefault("accuracy", {})[self.id] = self.n_ok / self.n_known
+
+
+class BlinkDetector(Node):
+    """Detects eye blinks in frontal / EOG channels: one 'blink' prediction per blink.
+
+    Causal and training-free: the selected channels are averaged, band-passed (0.5-10 Hz) and
+    compared with a threshold. In adaptive mode that is ``threshold_sd`` times the robust
+    spread (median absolute deviation) of the last ``history_s`` seconds, so it adapts to each
+    person and electrode; ``threshold_uv`` sets a fixed one. After a blink, ``refractory_s``
+    must pass before the next. With a markers input and ``truth`` (marker values of cued
+    blinks) it reports how many blinks it caught and how many extra detections it made."""
+
+    category = "classification"
+    title = "Blink Detector"
+    inputs = {"in": "signal", "markers": "markers"}
+    optional_inputs = {"markers"}
+    outputs = {"out": "predictions"}
+    params = {
+        "channels": Param(["Fp1", "Fp2"], "list", "Channels (names or regexes) averaged for detection, "
+                          "e.g. [Fp1, Fp2] or [VEOG]"),
+        "polarity": Param("positive", "choice", "Direction of a blink in these channels (positive at Fp1/Fp2 "
+                          "against an average or mastoid reference)", choices=["positive", "negative", "both"]),
+        "threshold_sd": Param(6.0, "float", "Adaptive threshold: this many robust SDs (MAD) from the median"),
+        "threshold_uv": Param(None, "float", "Fixed threshold in µV instead of the adaptive one"),
+        "refractory_s": Param(0.5, "float", "Minimum time between two blinks (s)"),
+        "history_s": Param(20.0, "float", "Seconds of signal behind the adaptive threshold"),
+        "label": Param("blink", "str", "Prediction label of a detected blink"),
+        "truth": Param(None, "list", "Marker values of cued blinks, to report how many were caught, e.g. ['1']"),
+        "report_s": Param(10.0, "float", "Seconds between status lines in the console"),
+    }
+    MIN_HISTORY_S = 3.0
+    MATCH_S = (-0.15, 0.8)  # a detection this long before/after a cue marker counts for that cue
+
+    def setup(self, in_meta):
+        import re
+
+        from scipy import signal as sps
+
+        from .preprocessing import _StreamingSOS
+
+        info = in_meta["in"]
+        pats = [str(c) for c in (self.p.channels or [])]
+        self.idx = [i for i, c in enumerate(info.ch_names) if any(c == p or re.fullmatch(p, c) for p in pats)]
+        if not self.idx:
+            raise ValueError(f"{self.id}: none of the channels {pats} in the signal "
+                             f"(available: {', '.join(info.ch_names[:12])}{'…' if info.n_channels > 12 else ''})")
+        if info.sfreq < 25:
+            raise ValueError(f"{self.id}: needs at least 25 Hz, got {info.sfreq:g} Hz")
+        self.sfreq = info.sfreq
+        # first order: a steeper filter rings after a blink and would count it twice
+        self.filt = _StreamingSOS(sps.butter(1, [0.5, 10.0], "bandpass", fs=info.sfreq, output="sos"), 1)
+        self.hist = np.zeros(0)
+        self.n_hist = int(self.p.history_s * info.sfreq)
+        self.above = False
+        self.last_blink = -np.inf
+        self.truth = {str(v) for v in (self.p.truth or [])}
+        self.cues: list[float] = []
+        self.dets: list[float] = []
+        self.n_hit = self.n_miss = self.n_extra = self.n_blinks = 0
+        self._t_report = None
+        return {"out": None}
+
+    def _threshold(self) -> float | None:
+        if self.p.threshold_uv is not None:
+            return float(self.p.threshold_uv)
+        if self.hist.size < self.MIN_HISTORY_S * self.sfreq:
+            return None
+        med = np.median(self.hist)
+        return float(self.p.threshold_sd * 1.4826 * np.median(np.abs(self.hist - med)))
+
+    def _score(self, now: float) -> None:
+        """Match cue markers with detections once both are old enough to be final."""
+        lo, hi = self.MATCH_S
+        for m in [m for m in self.cues if m + hi < now]:
+            match = next((d for d in self.dets if m + lo <= d <= m + hi), None)
+            if match is None:
+                self.n_miss += 1
+            else:
+                self.n_hit += 1
+                self.dets.remove(match)
+            self.cues.remove(m)
+        old = [d for d in self.dets if d + hi - lo < now and not any(m + lo <= d <= m + hi for m in self.cues)]
+        self.n_extra += len(old)
+        self.dets = [d for d in self.dets if d not in old]
+
+    def process(self, inputs):
+        for m in inputs.get("markers", []):
+            if m.value in self.truth:
+                self.cues.append(m.time)
+        out = []
+        for chunk in inputs["in"]:
+            if not chunk.n_samples:
+                continue
+            x = self.filt(chunk.data[self.idx].mean(axis=0, keepdims=True))[0]
+            thr = self._threshold()
+            if thr is not None:
+                center = 0.0 if self.p.threshold_uv is not None else float(np.median(self.hist))
+                v = x - center
+                v = v if self.p.polarity == "positive" else -v if self.p.polarity == "negative" else np.abs(v)
+                above = v > thr
+                rising = np.flatnonzero(above & ~np.concatenate([[self.above], above[:-1]]))
+                for i in rising:
+                    t = float(chunk.times[i])
+                    if t - self.last_blink < self.p.refractory_s:
+                        continue
+                    self.last_blink = t
+                    self.n_blinks += 1
+                    out.append(Prediction(t, self.p.label, {self.p.label: 1.0}))
+                    if self.truth:
+                        self.dets.append(t)
+                self.above = bool(above[-1])
+            self.hist = np.concatenate([self.hist, x])[-self.n_hist:]
+            now = float(chunk.times[-1])
+            if self.truth:
+                self._score(now)
+            if self._t_report is None or now - self._t_report >= self.p.report_s:
+                self._t_report = now
+                thr_txt = "calibrating" if thr is None else f"threshold {thr:.0f} µV"
+                score = (f" | caught {self.n_hit}/{self.n_hit + self.n_miss} cued blinks, {self.n_extra} extra"
+                         if self.n_hit + self.n_miss else "")
+                self.log(f"{self.n_blinks} blinks, {thr_txt}{score}")
+        return {"out": out}
+
+    def close(self):
+        if self.n_hit + self.n_miss:
+            self.log(f"final: caught {self.n_hit} of {self.n_hit + self.n_miss} cued blinks, {self.n_extra} extra detections")
+            self.context.store.setdefault("accuracy", {})[self.id] = self.n_hit / (self.n_hit + self.n_miss)

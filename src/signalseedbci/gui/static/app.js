@@ -93,13 +93,16 @@ const titleOf = (type) => schemaOf(type)?.title || type;
 const catColor = (cat) => `var(--c-${cat}, var(--c-misc))`;
 const kindColor = (kind) => `var(--k-${kind.split("|")[0]})`;
 
-// nodes with a live view in their box: a stream plot, or the eyes animation
-const NODE_VIEWS = { DataVisualizer: "scope", SpectrumOut: "scope", EyesFeedback: "eyes", GazeFeedback: "gaze" };
+// nodes with a live view in their box: a stream plot, the eyes animation, or the runner game
+const NODE_VIEWS = { DataVisualizer: "scope", SpectrumOut: "scope", EyesFeedback: "eyes", GazeFeedback: "gaze", RunnerGame: "runner" };
 const SCOPE_NODES = new Set(Object.keys(NODE_VIEWS));
 const paramOf = (n, k) => n.params[k] ?? schemaOf(n.type).params[k]?.default;
 const gazeParams = (n) => ({ up: paramOf(n, "up_label"), down: paramOf(n, "down_label"),
   left: paramOf(n, "left_label"), right: paramOf(n, "right_label"), hold: paramOf(n, "hold_s") });
+const runnerParams = (n) => ({ jumpLabel: String(paramOf(n, "jump_label")), trigger: paramOf(n, "trigger"),
+  minProba: Number(paramOf(n, "min_proba")) || 0, assist: !!paramOf(n, "assist"), crossingS: Number(paramOf(n, "crossing_s")) || 4 });
 function openNodeView(n) {
+  if (NODE_VIEWS[n.type] === "runner") return openRunnerWindow(miniStreamName(n), runnerParams(n));
   if (NODE_VIEWS[n.type] === "eyes") openEyesWindow(miniStreamName(n), paramOf(n, "closed_label"), !!paramOf(n, "graded"));
   else if (NODE_VIEWS[n.type] === "gaze") openEyesWindow(miniStreamName(n), "closed", !!paramOf(n, "graded"), gazeParams(n));
   else openScopeWindow(miniStreamName(n), n.type === "DataVisualizer" ? paramOf(n, "display") : null);
@@ -130,7 +133,7 @@ const DEFAULT_IDS = {
   LSLSource: "src", FileSource: "src", LSLMarkerSource: "markers", BandpassFilter: "band", NotchFilter: "notch",
   Rereference: "ref", PickChannels: "pick", RenameChannels: "names", Decimate: "down", Epocher: "epochs",
   SlidingWindow: "windows", BandPower: "power", Classifier: "clf", PredictionOut: "feedback", Logger: "log", SpectrumOut: "spectrum",
-  ThresholdClassifier: "state", EyesFeedback: "eyes", GazeFeedback: "gaze", TimeWindowMeans: "means",
+  ThresholdClassifier: "state", BlinkDetector: "blink", EyesFeedback: "eyes", GazeFeedback: "gaze", RunnerGame: "game", TimeWindowMeans: "means",
   DataVisualizer: "viz", Recorder: "rec", SignalScript: "script", EpochScript: "script",
 };
 
@@ -1105,7 +1108,8 @@ async function refreshFiles() {
 }
 
 // ------------------------------------------------------------------ data source (toolbar)
-const PARADIGMS = { "motor-imagery": "Motor imagery (cues 1/2)", "alpha-bursts": "Alpha bursts, 10 s every 20 s" };
+const PARADIGMS = { "motor-imagery": "Motor imagery (cues 1/2)", "alpha-bursts": "Alpha bursts, 10 s every 20 s",
+  "blinks": "Eye blinks, every 2-5 s (cue 1)" };
 const CREATE = "__create__";
 const needsFile = (src) => src === "replay" || src === "offline";
 
@@ -1448,7 +1452,7 @@ async function stopProc(id) {
   setTimeout(pollProcs, 300);
 }
 
-// ------------------------------------------------------------------ live views inside nodes (Data Visualizer, spectrum, eyes)
+// ------------------------------------------------------------------ live views inside nodes (Data Visualizer, spectrum, eyes, runner)
 const MINI = new Map();  // stream name -> {buf, events}
 const displayFilter = new Map();  // stream name -> display filter of its Data Visualizer node
 function miniStreamName(n) { return n.params.name ?? schemaOf(n.type).params.name.default; }
@@ -1463,6 +1467,10 @@ async function pollMiniScopes() {
   await Promise.all([...wanted].map(async ([name, type]) => {
     if (NODE_VIEWS[type] === "eyes" || NODE_VIEWS[type] === "gaze") {
       if (!MINI.has(name)) MINI.set(name, { eyes: new EventBuffer([name], 50), anim: new EyesAnimator() });
+      return MINI.get(name).eyes.poll();
+    }
+    if (NODE_VIEWS[type] === "runner") {
+      if (!MINI.has(name)) MINI.set(name, { eyes: new EventBuffer([name], 50), game: new RunnerGame() });
       return MINI.get(name).eyes.poll();
     }
     const spectrum = type === "SpectrumOut";  // the node plot only needs the latest spectra
@@ -1485,6 +1493,20 @@ function drawMiniScopes() {
     const m = MINI.get(miniStreamName(n));
     const status = node.querySelector(".mini-status");
     let text = "○ not streaming — Run the pipeline";
+    if (NODE_VIEWS[n.type] === "runner") {
+      if (!m?.game) continue;
+      const o = runnerParams(n);
+      m.game.crossingS = o.crossingS; m.game.assist = o.assist;
+      const live = runnerFeed(m.game, m.eyes, miniStreamName(n), o);
+      m.game.step(live);
+      const big = cv.clientWidth >= 320 && cv.clientHeight >= 160;
+      m.game.draw(cv, { compact: !big, dim: !live, label: big && !live ? `${runnerHint(o.jumpLabel)} · waiting for predictions` : null });
+      const sc = m.game.score, last = m.game.lastPred;
+      text = !live ? `○ waiting for predictions — Run the pipeline · jumps on '${o.jumpLabel}'`
+        : `● ${last ? `last ${last.label}` : "running"} · cleared ${sc.cleared}/${sc.cleared + sc.hit} · seeds ${sc.seeds}`;
+      if (status.textContent !== text) { status.textContent = text; status.classList.toggle("live", live); }
+      continue;
+    }
     if (NODE_VIEWS[n.type] === "gaze") {
       if (!m?.anim) continue;
       const g = gazeParams(n);

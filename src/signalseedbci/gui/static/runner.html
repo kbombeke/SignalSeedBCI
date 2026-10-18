@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Emu Runner</title>
+<link rel="icon" type="image/png" href="img/favicon.png">
+<link rel="apple-touch-icon" href="img/apple-touch-icon.png">
+<link rel="stylesheet" href="style.css">
+<style>
+  body.runner-page { display: flex; flex-direction: column; height: 100vh; }
+  .runner-page canvas { flex: 1; width: 100%; min-height: 0; }
+  .runner-bar { display: flex; align-items: center; gap: 12px; padding: 6px 12px; font-size: 12px; color: var(--muted);
+                background: var(--panel); border-top: 1px solid var(--border); }
+  .runner-bar label { display: flex; align-items: center; gap: 4px; }
+  .runner-bar .live { color: var(--ok); }
+  body.clean .runner-bar { display: none; }
+</style>
+</head>
+<body class="runner-page">
+<canvas id="cv" title="Double-click: hide/show the bar (for the participant)"></canvas>
+<div class="runner-bar">
+  <span id="status">waiting…</span>
+  <div class="spacer"></div>
+  <label title="Test the game without a BCI: the space bar jumps and the game runs without predictions"><input type="checkbox" id="keys"> space bar jumps (test)</label>
+  <label title="Hold a decoded jump for up to 2.5 s and jump at the right moment for the next obstacle"><input type="checkbox" id="assist"> assist</label>
+  <button id="restart">Restart</button>
+  <button id="fullscreen">Full screen</button>
+</div>
+<script src="scope.js"></script>
+<script src="runner.js"></script>
+<script>
+"use strict";
+const q = new URLSearchParams(location.search);
+const stream = q.get("stream") || "signalseedbci-runner";
+const opts = { jumpLabel: q.get("jump") || "blink", trigger: q.get("trigger") || "every", minProba: Number(q.get("minp") || 0) };
+const $ = (s) => document.querySelector(s);
+document.title = `Emu Runner · ${stream}`;
+const events = new EventBuffer([stream], 50);
+const game = new RunnerGame({ crossingS: Number(q.get("crossing") || 4), assist: q.get("assist") !== "0" });
+$("#assist").checked = game.assist;
+$("#assist").onchange = () => (game.assist = $("#assist").checked);
+
+async function poll() { await events.poll(); setTimeout(poll, 100); }
+function frame() {
+  const live = runnerFeed(game, events, stream, opts);
+  const keys = $("#keys").checked;
+  game.step(live || keys);
+  const label = live || keys ? null : `${runnerHint(opts.jumpLabel)} · waiting for the pipeline…`;
+  game.draw($("#cv"), { dim: !live && !keys, label });
+  const s = $("#status");
+  const p = game.lastPred;
+  s.textContent = live ? `● ${stream}: last ${p?.label ?? "–"}` + (p ? ` · P(${opts.jumpLabel}) = ${p.p.toFixed(2)}` : "")
+    + ` · jumps when the prediction ${opts.trigger === "every" ? "is" : "becomes"} '${opts.jumpLabel}'`
+    : keys ? "test mode: space bar jumps" : `○ no predictions on '${stream}' — run the pipeline`;
+  s.className = live ? "live" : "";
+  requestAnimationFrame(frame);
+}
+document.addEventListener("keydown", (e) => {
+  if (e.code === "Space" && $("#keys").checked) { e.preventDefault(); game.command(); }
+});
+$("#restart").onclick = () => game.reset();
+$("#fullscreen").onclick = () => document.documentElement.requestFullscreen?.();
+$("#cv").ondblclick = () => document.body.classList.toggle("clean");
+poll(); requestAnimationFrame(frame);
+</script>
+</body>
+</html>
