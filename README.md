@@ -24,6 +24,12 @@ or Windows, with or without an amplifier. Made by EMU Lab at Ghent University / 
 
 The command is **`signalseedbci`** (short: **`ssbci`**).
 
+![The SignalSeedBCI editor](docs/screenshots/editor.png)
+*The editor running `eyes_alpha.yaml` on a replayed recording: node tiles on the left, the
+pipeline on the canvas with live views (a Data Visualizer plotting alpha power, animated eyes that
+close when alpha is high), the selected node's settings on the right, and the Console below with
+the run's two processes.*
+
 ## Contents
 
 1. [How it works](#how-it-works)
@@ -33,10 +39,11 @@ The command is **`signalseedbci`** (short: **`ssbci`**).
 5. [Training a classifier](#training-a-classifier)
 6. [Pipelines](#pipelines)
 7. [Command line](#command-line)
-8. [Hardware: BioSemi ActiveTwo](#hardware-biosemi-activetwo)
-9. [Extending it with Python](#extending-it-with-python)
-10. [Development](#development)
-11. [Credits](#credits)
+8. [Example: Emu Runner](#example-emu-runner)
+9. [Hardware: BioSemi ActiveTwo](#hardware-biosemi-activetwo)
+10. [Extending it with Python](#extending-it-with-python)
+11. [Development](#development)
+12. [Credits](#credits)
 
 ## How it works
 
@@ -115,6 +122,8 @@ No hardware needed:
 
 ## The editor
 
+The screenshot at the top shows the layout.
+
 - **Toolbar**: load, create and save pipelines (⌘S saves); the validation status (hover for all
   problems); **Data**, where the data comes from when you press ▶ Run:
 
@@ -163,6 +172,10 @@ In the editor, the **Training** tab shows each classifier's state and offers two
   the cues (trigger port or LSL markers), then stop. The classifiers are fitted and the raw
   session is saved as `data/calib_<pipeline>_<time>_raw.fif`, to retrain on later.
 
+![The Training tab](docs/screenshots/training.png)
+*The Training tab for `motor_imagery.yaml`: how training works, the classifier's state (trained,
+cross-validated accuracy, which markers give which labels), and the two ways to train.*
+
 On the command line:
 
 ```bash
@@ -201,18 +214,8 @@ edges:
 | Epoching | `Epocher` (around markers), `SlidingWindow` (continuous decoding) |
 | Features | `BandPower`, `TimeWindowMeans` |
 | Classification | `Classifier` (`csp_lda`, `ts_lr`, `mdm`, `xdawn_ts_lr`, `lda`, or your own), `ThresholdClassifier` (high/low on one feature, self-calibrating, no training), **Blink Detector** (`BlinkDetector`: a `blink` prediction per eye blink in frontal/EOG channels, adaptive threshold, no training) |
-| Outputs | **Data Visualizer** (`DataVisualizer`: live plot + LSL stream), `SpectrumOut`, `EyesFeedback`, `GazeFeedback`, **Emu Runner** (`RunnerGame`, below), `PredictionOut` (JSON predictions over LSL), `Recorder` (.fif), `Logger` |
+| Outputs | **Data Visualizer** (`DataVisualizer`: live plot + LSL stream), `SpectrumOut`, `EyesFeedback`, `GazeFeedback`, **Emu Runner** (`RunnerGame`, a game, see [the example](#example-emu-runner)), `PredictionOut` (JSON predictions over LSL), `Recorder` (.fif), `Logger` |
 | Scripting | `SignalScript`, `EpochScript` (see [Extending it with Python](#extending-it-with-python)) |
-
-**Emu Runner**: a BCI showcase, a black-and-white platform game. An emu keeps running through
-the outback; a decoded action (`jump_label`, by default `blink` from the Blink Detector, or e.g.
-`left` from a motor-imagery Classifier) makes it leap over rocks and logs and pick up the seeds
-above them. `trigger: every` jumps on each such prediction (events such as blinks, or one
-prediction per trial); `change` when a continuous decision switches to that label. **Assist**
-(on by default) holds a command for up to 2.5 s and fires it at the right moment for the next
-obstacle, which makes the reaction time of a BCI playable. *Cleared x/y* doubles as a score of
-how often the decoded jumps came in time. ⧉ opens a full-screen window for the participant,
-with a space-bar test mode.
 
 **Examples** in `pipelines/`:
 
@@ -239,6 +242,55 @@ with a space-bar test mode.
 | `discover [--check]` | List LSL streams on the network |
 | `lsl-config --peers IP…` | Configure LSL for networks where discovery fails |
 | `nodes [--json]` | List node types and their settings |
+
+## Example: Emu Runner
+
+![Emu Runner in the editor](docs/screenshots/emu-runner-editor.png)
+*`blink_runner.yaml` running on synthetic blinks: the emu in the `game` node leaps when a blink is
+detected, the `eog` node shows the frontal channels with a line at each cued blink, and the
+Console reports how many cued blinks the Blink Detector caught.*
+
+Emu Runner shows a complete BCI loop on one screen: a signal comes in, a decision is decoded,
+and the decision acts in a game. An emu runs through the outback by itself; the participant makes
+it jump over rocks and logs by **blinking**. No training is needed.
+
+**The pipeline**, `pipelines/blink_runner.yaml`:
+
+| Node | Type | What it does |
+|---|---|---|
+| `src` | LSLSource | the EEG and trigger streams (amplifier, replay or simulation) |
+| `names` | RenameChannels | BioSemi labels A1…A32 → 10-20 names (Fp1, Fp2, …) |
+| `car` | Rereference | common average reference |
+| `frontal` | PickChannels | Fp1, Fp2, AF3, AF4, where blinks are largest |
+| `down` | Decimate | 512 → 128 Hz |
+| `blink` | Blink Detector | one `blink` prediction per blink: Fp1/Fp2 averaged, band-passed (0.5–10 Hz) and compared with a threshold that adapts to the person |
+| `game` | Emu Runner | the game: every `blink` prediction makes the emu jump |
+| `eog` | Data Visualizer | the frontal channels with the trigger markers |
+
+**Try it without hardware**: Load a pipeline › `blink_runner.yaml`, Data › *Synthetic EEG* ›
+*Eye blinks*, ▶ Run. The simulation blinks every 2–5 s and marks each blink with trigger `1`.
+After about 3 s of calibration the Blink Detector starts and the Console reports e.g.
+`caught 7/8 cued blinks, 0 extra`. Click **⧉** on the `game` node for the full-size game:
+
+![The Emu Runner window](docs/screenshots/emu-runner.png)
+
+The simulated blinks come at random moments, not when an obstacle approaches. With **assist**
+(on by default) a jump command is held for up to 2.5 s and fired at the right moment for the next
+obstacle, so a blink in that window still clears it; other obstacles are hit.
+
+**With a participant**: record from Fp1/Fp2 (or a vertical EOG pair; then set the Blink
+Detector's `channels` to that channel). Open the game window on a screen the participant sees,
+click *Full screen* (double-click hides the bar) and ask them to blink when an obstacle comes.
+Natural blinks also make the emu jump; that is part of the challenge.
+
+- **Score**: *SEEDS* are picked up on a good jump and lost on a hit; *CLEARED x/y* counts the
+  obstacles cleared out of those reached, a simple measure of how well the BCI worked.
+- **Tuning**: raise the Blink Detector's `threshold_sd` if eye movements cause jumps, lower it if
+  blinks are missed. In the game node, `crossing_s` sets the speed and `assist: false` makes it
+  harder. The window's *space bar jumps* mode tries the game without a BCI.
+- **Other decoders**: any prediction can drive the emu via `jump_label` and `trigger`, e.g.
+  `left` from a motor-imagery Classifier (`trigger: every`, one prediction per trial) or `closed`
+  from an alpha ThresholdClassifier (`trigger: change`, jump when the decision switches).
 
 ## Hardware: BioSemi ActiveTwo
 
