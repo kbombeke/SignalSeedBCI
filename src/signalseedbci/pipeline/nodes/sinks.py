@@ -13,13 +13,14 @@ from ...streams import SignalInfo
 from ..node import Node, Param
 
 
-class LSLSignalOut(Node):
-    """Publish a processed signal or feature vectors as an LSL stream.
+class DataVisualizer(Node):
+    """Live plot of a signal or feature vectors in the editor, also published as an LSL stream.
 
-    Connected markers are republished as '<name>-markers', so viewers (the node's
-    plot in the editor, the scope window) can show events next to the data."""
+    Connected markers are drawn as event lines and republished as '<name>-markers'.
+    (Pipeline files may still use the old type name LSLSignalOut.)"""
 
     category = "outputs"
+    title = "Data Visualizer"
     inputs = {"in": "signal|features", "markers": "markers"}
     optional_inputs = {"markers"}
     params = {

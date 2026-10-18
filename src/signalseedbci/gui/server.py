@@ -5,7 +5,7 @@ Serves the single-page editor (``static/``) and a small JSON API:
 - node schemas, pipeline load/save/validate, recording file listing
 - process manager: start/stop ``signalseedbci`` subcommands (run, train, synth, replay,
   fake bridge) and read their console output
-- LSL monitor: list streams and poll recent samples/markers for the live scope
+- LSL watcher: list streams and poll recent samples/markers for the live node views
 
 Standard library only. Binds to 127.0.0.1 and only accepts requests addressed to
 localhost, because the API can start processes and write files.
@@ -33,7 +33,7 @@ import numpy as np
 import yaml
 
 STATIC = Path(__file__).parent / "static"
-PARADIGMS = ("motor-imagery", "alpha-bursts", "eye-movements")
+PARADIGMS = ("motor-imagery", "alpha-bursts")
 RECORDING_SUFFIXES = {".bdf", ".edf", ".gdf", ".fif", ".xdf", ".vhdr", ".set", ".fif.gz"}
 SKIP_DIRS = {".venv", "venv", ".git", "__pycache__", "node_modules", ".pytest_cache"}
 
@@ -389,7 +389,7 @@ def validate_spec(spec: dict, base_dir: Path) -> dict:
                 except Exception as exc:
                     warnings.append(f"{nid}: cannot read model {path.name}: {exc}")
             else:
-                warnings.append(f"{nid}: not trained yet ({path.name} missing) — use Train before Run")
+                warnings.append(f"{nid}: not trained yet ({path.name} missing) — train it in the Training tab before Run")
         if type(node).__name__ == "FileSource" and node.p.path and not Path(node.p.path).exists():
             errors.append(f"{nid}: file not found: {node.p.path}")
     if not graph.sources():
@@ -423,8 +423,8 @@ class App:
     # ---- API handlers: (query, body) -> json-able
     def api_nodes(self, q, b):
         from ..models import BUILTIN
-        from ..pipeline import REGISTRY
-        return {"nodes": [cls.schema() for cls in REGISTRY.values()],
+        from ..pipeline import ALIASES, REGISTRY
+        return {"nodes": [cls.schema() for cls in REGISTRY.values()], "aliases": ALIASES,
                 "estimators": {k: v[2] for k, v in BUILTIN.items()}}
 
     def api_pipelines(self, q, b):

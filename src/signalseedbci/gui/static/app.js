@@ -25,7 +25,7 @@ const NODE_W = 196, HEAD_H = 33, ROW_H = 22;
 const KINDS = ["signal", "markers", "epochs", "features", "predictions"];
 
 const S = {
-  schemas: {}, estimators: {}, files: [],
+  schemas: {}, aliases: {}, estimators: {}, files: [],
   path: null, name: "Untitled", description: "", extra: {},
   nodes: new Map(), edges: [],
   selected: null,           // {kind: "node", id} | {kind: "edge", index}
@@ -89,11 +89,12 @@ async function askText(title, label, value = "") {
 
 // ------------------------------------------------------------------ schema helpers
 const schemaOf = (type) => S.schemas[type];
+const titleOf = (type) => schemaOf(type)?.title || type;
 const catColor = (cat) => `var(--c-${cat}, var(--c-misc))`;
 const kindColor = (kind) => `var(--k-${kind.split("|")[0]})`;
 
 // nodes with a live view in their box: a stream plot, or the eyes animation
-const NODE_VIEWS = { LSLSignalOut: "scope", SpectrumOut: "scope", EyesFeedback: "eyes", GazeFeedback: "gaze" };
+const NODE_VIEWS = { DataVisualizer: "scope", SpectrumOut: "scope", EyesFeedback: "eyes", GazeFeedback: "gaze" };
 const SCOPE_NODES = new Set(Object.keys(NODE_VIEWS));
 const paramOf = (n, k) => n.params[k] ?? schemaOf(n.type).params[k]?.default;
 const gazeParams = (n) => ({ up: paramOf(n, "up_label"), down: paramOf(n, "down_label"),
@@ -101,7 +102,7 @@ const gazeParams = (n) => ({ up: paramOf(n, "up_label"), down: paramOf(n, "down_
 function openNodeView(n) {
   if (NODE_VIEWS[n.type] === "eyes") openEyesWindow(miniStreamName(n), paramOf(n, "closed_label"), !!paramOf(n, "graded"));
   else if (NODE_VIEWS[n.type] === "gaze") openEyesWindow(miniStreamName(n), "closed", !!paramOf(n, "graded"), gazeParams(n));
-  else openScopeWindow(miniStreamName(n), n.type === "LSLSignalOut" ? paramOf(n, "display") : null);
+  else openScopeWindow(miniStreamName(n), n.type === "DataVisualizer" ? paramOf(n, "display") : null);
 }
 // nodes can be resized: n.w (width) for all nodes, n.vh (height of the live view) for view nodes
 const VIEW_H = 86, VIEW_PAD = 32, MIN_W = NODE_W, MAX_W = 1600, MIN_VH = 60, MAX_VH = 1200;
@@ -130,7 +131,7 @@ const DEFAULT_IDS = {
   Rereference: "ref", PickChannels: "pick", RenameChannels: "names", Decimate: "down", Epocher: "epochs",
   SlidingWindow: "windows", BandPower: "power", Classifier: "clf", PredictionOut: "feedback", Logger: "log", SpectrumOut: "spectrum",
   ThresholdClassifier: "state", EyesFeedback: "eyes", GazeFeedback: "gaze", TimeWindowMeans: "means",
-  LSLSignalOut: "out", Recorder: "rec", SignalScript: "script", EpochScript: "script",
+  DataVisualizer: "viz", Recorder: "rec", SignalScript: "script", EpochScript: "script",
 };
 
 function paramSummary(node) {
@@ -177,11 +178,12 @@ function loadSpecState(spec) {
   S.nodes = new Map(); S.edges = [];
   const layout = spec.layout || {};
   for (const [id, ns] of Object.entries(spec.nodes || {})) {
-    if (!schemaOf(ns.type)) { toast(`Unknown node type ${ns.type} (${id}) skipped`, true); continue; }
+    const type = S.aliases[ns.type] || ns.type;  // renamed types (e.g. LSLSignalOut) load as the new one
+    if (!schemaOf(type)) { toast(`Unknown node type ${ns.type} (${id}) skipped`, true); continue; }
     const [x, y, w, vh] = layout[id] || [NaN, NaN];
-    const node = { id, type: ns.type, params: { ...(ns.params || {}) }, x, y };
+    const node = { id, type, params: { ...(ns.params || {}) }, x, y };
     if (w && w > NODE_W) node.w = Math.min(MAX_W, w);
-    if (vh && SCOPE_NODES.has(ns.type) && vh !== VIEW_H) node.vh = Math.max(MIN_VH, Math.min(MAX_VH, vh));
+    if (vh && SCOPE_NODES.has(type) && vh !== VIEW_H) node.vh = Math.max(MIN_VH, Math.min(MAX_VH, vh));
     S.nodes.set(id, node);
   }
   for (const text of spec.edges || []) {
@@ -290,7 +292,7 @@ function renderNodes() {
       style: `left:${n.x}px;top:${n.y}px;width:${nodeW(n)}px;--cat:${catColor(sc.category)}`, "data-id": n.id,
     });
     const head = el("div", { class: "node-head", title: sc.description },
-      el("span", { class: "nid" }, n.id), el("span", { class: "ntype" }, n.type));
+      el("span", { class: "nid" }, n.id), el("span", { class: "ntype" }, titleOf(n.type)));
     if (SCOPE_NODES.has(n.type)) {
       head.append(el("button", {
         class: "node-btn", title: "Open this plot in a separate window",
@@ -581,7 +583,7 @@ function overlaps(x, y, type, ignore) {
   });
 }
 function resolveOverlaps() {
-  // saved layouts may predate taller nodes (e.g. the plot in LSLSignalOut): push nodes down
+  // saved layouts may predate taller nodes (e.g. the plot in a Data Visualizer): push nodes down
   const placed = [];
   for (const n of [...S.nodes.values()].sort((a, b) => a.y - b.y || a.x - b.x)) {
     const h = nodeH(n) + 26;
@@ -657,7 +659,7 @@ function fitView() {
   const x0 = Math.min(...ns.map((n) => n.x)), y0 = Math.min(...ns.map((n) => n.y));
   const x1 = Math.max(...ns.map((n) => n.x + nodeW(n)));
   const y1 = Math.max(...ns.map((n) => n.y + nodeH(n) + 30));
-  const k = Math.min(1.2, Math.max(0.5, Math.min((r.width - 80) / (x1 - x0), (r.height - 80) / (y1 - y0))));
+  const k = Math.min(1.2, Math.max(0.3, Math.min((r.width - 80) / (x1 - x0), (r.height - 80) / (y1 - y0))));
   S.view = { k, x: (r.width - (x1 - x0) * k) / 2 - x0 * k, y: (r.height - (y1 - y0) * k) / 2 - y0 * k };
   applyView();
 }
@@ -753,18 +755,29 @@ function renderPalette() {
   const order = ["sources", "preprocessing", "scripting", "epoching", "features", "classification", "outputs"];
   const byCat = {};
   for (const sc of Object.values(S.schemas)) {
-    if (q && !(sc.type.toLowerCase().includes(q) || sc.description.toLowerCase().includes(q))) continue;
+    if (q && ![sc.type, sc.title, sc.description].some((t) => t.toLowerCase().includes(q))) continue;
     (byCat[sc.category] ||= []).push(sc);
   }
   const host = $("#paletteList");
   host.replaceChildren();
   const cats = Object.keys(byCat).sort((a, b) => (order.indexOf(a) + 99 * (order.indexOf(a) < 0)) - (order.indexOf(b) + 99 * (order.indexOf(b) < 0)));
+  // each tile is a small node: category stripe, name, and its input (left) / output (right) dots
+  const dots = (ports) => Object.entries(ports).map(([p, kind]) =>
+    el("span", { class: "pal-dot", style: `--kind:${kindColor(kind)}`, title: `${p}: ${kind}` }));
   for (const cat of cats) {
     host.append(el("div", { class: "pal-cat", style: `--cat:${catColor(cat)}` }, cat));
-    for (const sc of byCat[cat].sort((a, b) => a.type.localeCompare(b.type))) {
-      const item = el("div", { class: "pal-item", draggable: "true", title: sc.description },
-        sc.type, el("small", {}, sc.description));
-      item.addEventListener("dragstart", (ev) => ev.dataTransfer.setData("text/signalseedbci-node", sc.type));
+    for (const sc of byCat[cat].sort((a, b) => titleOf(a.type).localeCompare(titleOf(b.type)))) {
+      const item = el("div", { class: "pal-item", draggable: "true", style: `--cat:${catColor(sc.category)}`,
+        title: `${sc.description}\n\nDrag onto the canvas, or click to add it after the selected node.` },
+        el("div", { class: "pal-ports in" }, dots(sc.inputs)),
+        el("div", { class: "pal-body" },
+          el("div", { class: "pal-title" }, el("span", { class: "grip" }, "⠿"), titleOf(sc.type)),
+          el("small", {}, sc.description)),
+        el("div", { class: "pal-ports out" }, dots(sc.outputs)));
+      item.addEventListener("dragstart", (ev) => {
+        ev.dataTransfer.setData("text/signalseedbci-node", sc.type);
+        ev.dataTransfer.effectAllowed = "copy";
+      });
       item.addEventListener("click", () => addNode(sc.type));
       host.append(item);
     }
@@ -991,8 +1004,8 @@ function buildInspector() {
     const idInput = el("input", { type: "text", value: n.id, "data-key": "__id" });
     idInput.onchange = () => renameNode(n.id, idInput.value.trim(), idInput);
     host.append(
-      el("h2", {}, n.type),
-      el("div", { class: "sub" }, sc.category),
+      el("h2", {}, titleOf(n.type)),
+      el("div", { class: "sub" }, sc.title !== n.type ? `${sc.category} · ${n.type} in the pipeline file` : sc.category),
       el("div", { class: "desc" }, sc.description),
       el("div", { class: "field" }, el("label", {}, "Node id"), idInput),
       ...messagesFor(n.id),
@@ -1036,7 +1049,8 @@ function buildInspector() {
       el("li", {}, "Select a node to edit its parameters; ● marks values that differ from the default."),
       el("li", {}, el("span", { class: "kbd" }, "Del"), " deletes, ", el("span", { class: "kbd" }, "⌘D"), " duplicates, ", el("span", { class: "kbd" }, "⌘Z"), " undoes, ",
         el("span", { class: "kbd" }, "⌘S"), " saves; scroll to pan, pinch or ⌘-scroll to zoom."),
-      el("li", {}, "Train fits Classifier nodes on recordings; Run uses live LSL, a replay, or a fast offline pass.")));
+      el("li", {}, "▶ Run uses the Data chosen in the toolbar: live LSL, a replay, synthetic EEG, or a fast offline pass."),
+      el("li", {}, "Classifier nodes learn from labelled data first: see the Training tab at the bottom.")));
 }
 
 function renameNode(old, nu, input) {
@@ -1069,7 +1083,7 @@ async function validate() {
   else if (v.warnings.length) { box.className = "validity warn"; box.textContent = "⚠ " + v.warnings[0]; }
   else { box.className = "validity ok"; box.textContent = `✓ valid · ${S.nodes.size} nodes`; }
   box.title = [...v.errors, ...v.warnings].join("\n");
-  renderNodes(); renderEdges(); renderInspector();
+  renderNodes(); renderEdges(); renderInspector(); renderTraining();
 }
 
 // ------------------------------------------------------------------ files
@@ -1087,11 +1101,11 @@ async function refreshFiles() {
   S.files = files;
   S.filesLoaded = true;
   updateDataDetail();
+  renderTraining();
 }
 
 // ------------------------------------------------------------------ data source (toolbar)
-const PARADIGMS = { "motor-imagery": "Motor imagery (cues 1/2)", "alpha-bursts": "Alpha bursts, 10 s every 20 s",
-  "eye-movements": "Eye movements, in-ear (cues 1-4)" };
+const PARADIGMS = { "motor-imagery": "Motor imagery (cues 1/2)", "alpha-bursts": "Alpha bursts, 10 s every 20 s" };
 const CREATE = "__create__";
 const needsFile = (src) => src === "replay" || src === "offline";
 
@@ -1128,9 +1142,8 @@ async function createRecording() {
   paradigm.onchange = dur.oninput = suggest;
   suggest();
   const ok = await modal("Create synthetic recording", [
-    el("p", { class: "muted" }, "A labelled recording (512 Hz) for training, replay and offline tests. Motor imagery and "
-      + "alpha bursts use a 32-electrode BioSemi cap; eye movements a 16-channel in-ear montage (12 in-ear electrodes, "
-      + "mastoids, forehead, neck)."),
+    el("p", { class: "muted" }, "A labelled recording (512 Hz, 32-electrode BioSemi cap) for training, replay and "
+      + "offline tests."),
     el("div", { class: "field" }, el("label", {}, "Contents"), paradigm),
     el("div", { class: "field" }, el("label", {}, "Duration (s)"), dur),
     el("div", { class: "field" }, el("label", {}, "Save as"), file),
@@ -1212,9 +1225,8 @@ async function startSession(train = false) {
     S.logSince[r.run.id] = 0;
     for (const w of r.warnings) toast(w, true, 7000);
     if (train) toast("Calibrating: give the cues, then press ■ Stop to train", false, 6000);
-    showTab("console");
+    else showTab("console");
     await pollProcs();
-    if (monitorVisible()) setTimeout(refreshStreams, 2000);
   } catch (e) { toast(e.message, true); }
 }
 
@@ -1225,44 +1237,132 @@ async function run() {
   return startSession(false);
 }
 
-async function train() {
-  if (!(await ensureSaved())) return;
-  await validate();
-  if (![...S.nodes.values()].some((n) => n.type === "Classifier")) {
-    return toast("This pipeline has no Classifier node to train", true);
+// ------------------------------------------------------------------ training (bottom tab)
+const classifierNodes = () => [...S.nodes.values()].filter((n) => n.type === "Classifier");
+const trainingProc = () => S.procs.filter((p) => p.kind === "train").pop();  // latest training process
+S.trainFiles = new Set();  // recordings ticked in the Training tab
+
+/** Epocher(s) upstream of a node: they decide which markers make (labelled) examples. */
+function upstreamOf(id, type) {
+  const seen = new Set(), stack = [id], found = [];
+  while (stack.length) {
+    const cur = stack.pop();
+    for (const e of S.edges) {
+      if (e.dst !== cur || seen.has(e.src)) continue;
+      seen.add(e.src);
+      if (S.nodes.get(e.src)?.type === type) found.push(S.nodes.get(e.src));
+      stack.push(e.src);
+    }
   }
-  if (S.runProcId != null && S.procs.find((p) => p.id === S.runProcId)?.running) {
-    return toast("Stop the current run first", true);
-  }
-  await refreshFiles();
-  const source = $("#dataSource"), liveOk = source.value !== "offline";
-  const dataLabel = source.selectedOptions[0].textContent
+  return found;
+}
+
+function labelsText(clf) {
+  const ep = upstreamOf(clf.id, "Epocher");
+  if (!ep.length) return { ok: false, text: "No Epocher before this classifier, so its examples carry no labels and it "
+    + "cannot be trained. Add an Epocher (signal + markers) between the source and the classifier." };
+  const events = paramOf(ep[0], "events");
+  if (!events || !Object.keys(events).length) return { ok: true, text: `${ep[0].id}: every marker is an example, labelled with its value.` };
+  return { ok: true, text: `${ep[0].id}: ` + Object.entries(events).map(([m, l]) => `marker ${m} → ${l}`).join(", ")
+    + ` · epoch ${paramOf(ep[0], "tmin")} to ${paramOf(ep[0], "tmax")} s after the marker` };
+}
+
+function renderTraining(force = false) {
+  const host = $("#trainingPanel");
+  if (!host || (host.closest(".tab-body").hidden && !force)) return;
+  const clfs = classifierNodes(), v = S.validation, last = trainingProc();
+  const run = S.procs.find((p) => p.id === S.runProcId);
+  const calibrating = !!(run?.running && run.kind === "train"), busy = !!last?.running || !!run?.running;
+  const source = $("#dataSource"), live = source.value !== "offline";
+  const dataLabel = source.selectedOptions[0]?.textContent
     + (needsFile(source.value) || source.value === "synthetic" ? ` › ${$("#dataDetail").selectedOptions[0]?.textContent || ""}` : "");
-  const modeLive = el("input", { type: "radio", name: "trainMode", value: "live", disabled: !liveOk });
-  const modeFiles = el("input", { type: "radio", name: "trainMode", value: "files" });
-  (liveOk && !S.files.length ? modeLive : modeFiles).checked = true;
-  const checks = S.files.map((f) => el("label", {}, el("input", { type: "checkbox", value: f }), f));
-  const body = [
-    el("label", { class: "train-mode" }, modeFiles, el("b", {}, "Recordings"),
-      el("span", { class: "muted" }, "Run the pipeline offline over the ticked files and fit every Classifier on the labelled epochs.")),
-    S.files.length ? el("div", { class: "file-checks", onchange: () => { modeFiles.checked = true; } }, ...checks)
-      : el("div", { class: "msg warn" }, "No recordings in the project. Use Data › Replay a recording › ＋ Create synthetic recording, or copy BDF files into data/."),
-    el("label", { class: "train-mode" }, modeLive, el("b", {}, "Live session"),
-      el("span", { class: "muted" }, liveOk
-        ? `Calibrate now on ${dataLabel}: present the cues, then press ■ Stop. The classifiers are fitted and the raw session is saved in data/ for retraining.`
-        : "Needs streaming data: choose a Data source other than “Recording, offline”.")),
-  ];
-  if (!(await modal("Train classifiers", body, "Train"))) return;
-  if (modeLive.checked) return startSession(true);
-  const files = checks.map((c) => c.querySelector("input")).filter((i) => i.checked).map((i) => i.value);
-  if (!files.length) return toast("Select at least one recording", true);
+  const sig = JSON.stringify([clfs.map((n) => [n.id, n.params]), S.edges.length, v.node_info, v.warnings, S.files,
+    source.value, $("#dataDetail").value, calibrating, busy, last && [last.id, last.running, last.returncode], S.path, S.dirty]);
+  if (!force && sig === host.dataset.sig) return;  // unchanged: keep scroll position and ticked boxes
+  host.dataset.sig = sig;
+
+  const how = el("div", { class: "card note wide" }, el("h3", {}, "How training works"),
+    el("ol", {},
+      el("li", {}, "A ", el("b", {}, "Classifier"), " node learns from labelled examples. The labels come from markers "
+        + "(trigger codes or LSL markers): the Epocher before it cuts an epoch after each marker and labels it, e.g. 1 → left."),
+      el("li", {}, "Training runs the pipeline over data with exactly the same filters as ▶ Run, collects every labelled "
+        + "example that reaches a Classifier, fits it, and reports the cross-validated accuracy (what to expect on new data)."),
+      el("li", {}, "The model is saved in the Classifier's ", el("code", {}, "model_path"), ". ▶ Run loads it and predicts. "
+        + "Retrain after changing anything before the classifier (channels, filters, epoch times)."),
+      el("li", {}, el("b", {}, "Recordings"), ": train on files you already have. ", el("b", {}, "Live"),
+        ": record a calibration session now; it is saved in data/ so you can retrain on it later.")));
+
+  const status = el("div", { class: "card" }, el("h3", {}, "Classifiers in this pipeline"));
+  if (!clfs.length) {
+    status.append(el("p", {}, "This pipeline has no Classifier, so there is nothing to train. Pipelines that decide "
+      + "without training (e.g. a ThresholdClassifier) or only show data can be run directly."),
+      el("p", {}, "To add one: source → filters → Epocher (with the markers connected) → Classifier."));
+  }
+  for (const n of clfs) {
+    const lab = labelsText(n), info = v.node_info?.[n.id];
+    const warn = v.warnings.find((m) => m.startsWith(`${n.id}:`));
+    status.append(el("div", { class: "clf" },
+      el("div", {}, el("b", {}, n.id), ` · ${paramOf(n, "estimator")} → `, el("code", {}, String(paramOf(n, "model_path")).split("/").pop())),
+      el("div", { class: "msg " + (info ? "info" : "warn") }, info ? `✓ ${info}` : warn ? warn.replace(`${n.id}: `, "") : "not trained yet"),
+      el("div", { class: "help" + (lab.ok ? "" : " bad") }, lab.text)));
+  }
+  if (last) {
+    status.append(el("div", { class: "last" }, last.running ? "● training…" : last.returncode === 0 ? "Last training finished." : "Last training failed.",
+      " ", el("button", { onclick: () => { S.activeProc = last.id; S.procSig = null; $("#log").replaceChildren(); S.logSince[last.id] = 0; showTab("console"); pollProcs(); pollLog(); } }, "Show output")));
+  }
+
+  const noClf = !clfs.length;
+  const checks = S.files.map((f) => {
+    const box = el("input", { type: "checkbox", value: f, onchange: () => { if (box.checked) S.trainFiles.add(f); else S.trainFiles.delete(f); trainBtn.disabled = noClf || busy || !S.trainFiles.size; } });
+    box.checked = S.trainFiles.has(f);
+    return el("label", { title: f }, box, f.replace(/^data\//, ""));
+  });
+  const trainBtn = el("button", { class: "primary", onclick: trainOnFiles }, "Train on ticked recordings");
+  trainBtn.disabled = noClf || busy || !S.trainFiles.size;
+  const files = el("div", { class: "card" }, el("h3", {}, "1 · Train on recordings"),
+    el("p", {}, "The pipeline runs over each ticked file as fast as possible; the labelled examples of all files are pooled. "
+      + "Use recordings with the same channels and markers as the live setup, e.g. an earlier calibration session."),
+    S.files.length ? el("div", { class: "file-checks" }, ...checks)
+      : el("div", { class: "msg warn" }, "No recordings in the project yet: copy BDF/FIF/XDF files into data/, or record a live session (2)."),
+    trainBtn);
+
+  const liveBtn = calibrating
+    ? el("button", { class: "danger", onclick: () => stopProc(S.runProcId) }, "■ Stop and train")
+    : el("button", { class: "primary", onclick: startCalibration }, "● Start live calibration");
+  if (!calibrating) liveBtn.disabled = noClf || busy || !live;
+  const liveCard = el("div", { class: "card" }, el("h3", {}, "2 · Train on a live session"),
+    el("p", {}, "Data: ", el("b", {}, dataLabel), live ? "" : " — choose a streaming Data source in the toolbar"),
+    el("ol", {},
+      el("li", {}, "Start the calibration; the console shows ● calibrating."),
+      el("li", {}, "Present the cues from your stimulus program (trigger port or LSL markers), several trials per class."),
+      el("li", {}, "Stop: the classifiers are fitted and the session is saved as data/calib_<pipeline>_<time>_raw.fif.")),
+    liveBtn);
+
+  host.replaceChildren(how, status, files, liveCard);
+}
+
+async function readyToTrain() {
+  if (!(await ensureSaved())) return false;
+  await validate();
+  if (S.validation.errors.length) { toast("Fix the validation errors first", true); return false; }
+  return true;
+}
+
+async function trainOnFiles() {
+  if (!(await readyToTrain())) return;
+  const files = S.files.filter((f) => S.trainFiles.has(f));
   try {
     const p = await api("/api/process/start", { kind: "train", pipeline: S.path, options: { files } });
-    showTab("console");
     S.activeProc = p.id;
-    S.trainProcId = p.id;
+    toast(`Training on ${files.length} recording${files.length > 1 ? "s" : ""}… (output in the Console)`);
     await pollProcs();
   } catch (e) { toast(e.message, true); }
+}
+
+async function startCalibration() {
+  if (!(await readyToTrain())) return;
+  await startSession(true);
+  showTab("training");
 }
 
 // ------------------------------------------------------------------ console
@@ -1293,7 +1393,7 @@ async function pollProcs() {
     }
     if (S.activeProc == null && processes.length) S.activeProc = processes[processes.length - 1].id;
     const sig = JSON.stringify([processes.map((p) => [p.id, p.running, p.returncode]), S.activeProc]);
-    if (sig !== S.procSig) { S.procSig = sig; renderProcs(); }
+    if (sig !== S.procSig) { S.procSig = sig; renderProcs(); renderTraining(); }
     const run = processes.find((p) => p.id === S.runProcId);
     const running = !!(run && run.running);
     $("#btnStop").hidden = !running;
@@ -1304,12 +1404,23 @@ async function pollProcs() {
   } catch { /* server gone */ }
 }
 
+const ROLES = { source: "data source", run: "pipeline", train: "training", synth: "recording" };
+
 function renderProcs() {
   const host = $("#procList");
-  host.replaceChildren(...S.procs.slice().reverse().map((p) => {
+  const note = el("div", { class: "proc-note" },
+    el("b", {}, "Why two processes per ▶ Run? "),
+    "One is the ", el("b", {}, "data source"), ": it plays the recording, synthetic EEG or simulated amplifier as LSL "
+    + "streams, exactly as a real amplifier would. The other is your ", el("b", {}, "pipeline"), ", which reads those "
+    + "streams. They are linked: stopping one stops both. With ", el("i", {}, "Amplifier / bridge (live)"),
+    " only the pipeline starts (the bridge runs on its own), and ", el("i", {}, "Recording, offline"),
+    " reads the file inside the pipeline.");
+  host.replaceChildren(note, ...S.procs.slice().reverse().map((p) => {
     const st = p.running ? "run" : p.returncode ? "fail" : "";
     return el("div", { class: "proc" + (p.id === S.activeProc ? " active" : ""), onclick: () => { S.activeProc = p.id; S.procSig = null; renderProcs(); $("#log").replaceChildren(); S.logSince[p.id] = 0; pollLog(); } },
-      el("span", { class: "st " + st }), el("span", { class: "lbl", title: "signalseedbci " + p.args.join(" ") }, p.label),
+      el("span", { class: "st " + st }),
+      el("span", { class: "role " + p.kind }, ROLES[p.kind] || p.kind),
+      el("span", { class: "lbl", title: "signalseedbci " + p.args.join(" ") }, p.label),
       p.running ? el("button", { onclick: (e) => { e.stopPropagation(); stopProc(p.id); } }, "Stop") : null);
   }));
   if (!S.procs.length) host.append(el("p", { class: "muted", style: "padding:6px" }, "Runs (with their data source), training and recordings you create appear here."));
@@ -1337,85 +1448,9 @@ async function stopProc(id) {
   setTimeout(pollProcs, 300);
 }
 
-// ------------------------------------------------------------------ monitor
-const MON = { buf: null, events: new EventBuffer([]) };
-const monitorVisible = () => !$('[data-body="monitor"]').hidden && !$("#bottom").classList.contains("collapsed");
-
-async function refreshStreams() {
-  const host = $("#streamList");
-  host.replaceChildren(el("p", { class: "muted" }, "Searching…"));
-  try {
-    const { streams } = await api("/api/streams?wait=1.0");
-    host.replaceChildren();
-    if (!streams.length) host.append(el("p", { class: "muted" }, "No LSL streams. Start a data source, the Windows bridge, or a pipeline with LSL outputs."));
-    for (const s of streams) {
-      const isEvents = s.format === "string";
-      const active = isEvents ? MON.events.names.has(s.name) : MON.buf?.name === s.name;
-      host.append(el("div", {
-        class: "stream" + (active ? " active" : ""), title: isEvents ? "Click to show/hide events" : "Click to plot",
-        onclick: () => { if (isEvents) toggleEvents(s.name); else setScope(s.name); refreshStreams(); },
-      }, el("strong", {}, s.name),
-        el("small", {}, `${s.type || "?"} · ${s.channels} ch · ${s.sfreq ? s.sfreq + " Hz" : "irregular"} · ${s.host}`)));
-    }
-  } catch (e) { host.replaceChildren(el("p", { class: "muted" }, e.message)); }
-}
-
-function setScope(name) {
-  MON.buf = new StreamBuffer(name, { filter: $("#scopeFilter").value });
-  $("#scopeTitle").textContent = name;
-  $("#scopeTitle").classList.remove("muted");
-  $("#btnScopeWindow").hidden = false;
-}
-
-function toggleEvents(name) {
-  const names = new Set(MON.events.names);
-  if (names.has(name)) names.delete(name); else names.add(name);
-  MON.events.setNames([...names]);
-}
-
-async function pollMonitor() {
-  if (!monitorVisible() || !MON.buf) return;
-  MON.buf.setFilter($("#scopeFilter").value);
-  await MON.buf.poll(Number($("#scopeWin").value) + 2);
-  if (MON.buf.ch.length) updatePages();
-}
-
-function updatePages() {
-  const ch = MON.buf.ch, n = ch.length, per = 16, sel = $("#scopePage");
-  if (sel.dataset.sig === ch.join()) return;
-  const pages = Math.max(1, Math.ceil(n / per));
-  sel.replaceChildren(...Array.from({ length: pages }, (_, i) =>
-    el("option", { value: i }, `${ch[i * per]}–${ch[Math.min(n, (i + 1) * per) - 1]}`)));
-  sel.dataset.sig = ch.join();
-}
-
-async function pollMonitorEvents() {
-  if (!monitorVisible()) return;
-  await MON.events.poll();
-  renderEvents();
-}
-
-function renderEvents() {
-  const evs = MON.events.events;
-  $("#eventList").replaceChildren(...evs.slice(-80).reverse().map((e) =>
-    el("li", { title: e.stream }, el("span", { class: "t" }, e.t.toFixed(2)), el("span", {}, eventLabel(e.v)))));
-  const lastPred = [...evs].reverse().find((e) => e.v.startsWith("{"));
-  const bars = $("#probaBars");
-  bars.replaceChildren();
-  if (!lastPred) return;
-  try {
-    const j = JSON.parse(lastPred.v);
-    for (const [k, p] of Object.entries(j.proba || {})) {
-      bars.append(el("div", { class: "bar" }, el("span", { class: "name" }, k),
-        el("span", { class: "fill", style: `width:${Math.round(p * 150)}px;${k === j.label ? "" : "opacity:.45"}` }),
-        el("span", {}, p.toFixed(2))));
-    }
-  } catch { /* not a prediction */ }
-}
-
-// ------------------------------------------------------------------ plots inside LSLSignalOut nodes
+// ------------------------------------------------------------------ live views inside nodes (Data Visualizer, spectrum, eyes)
 const MINI = new Map();  // stream name -> {buf, events}
-const displayFilter = new Map();  // stream name -> display filter of its LSLSignalOut node
+const displayFilter = new Map();  // stream name -> display filter of its Data Visualizer node
 function miniStreamName(n) { return n.params.name ?? schemaOf(n.type).params.name.default; }
 const scopeNodes = () => [...S.nodes.values()].filter((n) => SCOPE_NODES.has(n.type));
 
@@ -1423,7 +1458,7 @@ async function pollMiniScopes() {
   if (document.hidden) return;
   const wanted = new Map(scopeNodes().map((n) => [miniStreamName(n), n.type]));
   displayFilter.clear();
-  for (const n of scopeNodes()) if (n.type === "LSLSignalOut") displayFilter.set(miniStreamName(n), paramOf(n, "display"));
+  for (const n of scopeNodes()) if (n.type === "DataVisualizer") displayFilter.set(miniStreamName(n), paramOf(n, "display"));
   for (const k of [...MINI.keys()]) if (!wanted.has(k)) MINI.delete(k);
   await Promise.all([...wanted].map(async ([name, type]) => {
     if (NODE_VIEWS[type] === "eyes" || NODE_VIEWS[type] === "gaze") {
@@ -1498,13 +1533,6 @@ function drawMiniScopes() {
 }
 
 function frame() {
-  if (monitorVisible()) {
-    const sc = $("#scopeScale").value;
-    drawStream($("#scopeCanvas"), MON.buf, {
-      window: Number($("#scopeWin").value), mode: $("#scopeMode").value, scale: sc === "auto" ? "auto" : Number(sc),
-      page: Number($("#scopePage").value || 0), perPage: 16, events: MON.events.events,
-    });
-  }
   drawMiniScopes();
   requestAnimationFrame(frame);
 }
@@ -1513,8 +1541,8 @@ function frame() {
 function showTab(name) {
   $$(".tabs [data-tab]").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   $$(".tab-body").forEach((b) => (b.hidden = b.dataset.body !== name));
-  $("#bottom").classList.remove("collapsed");
-  if (name === "monitor") refreshStreams();
+  setBottomCollapsed(false);
+  if (name === "training") renderTraining(true);
   localStorageSet("tab", name);
 }
 
@@ -1525,30 +1553,116 @@ function setupToolbar() {
   $("#btnSaveAs").onclick = () => save(true);
   $("#btnRun").onclick = run;
   $("#btnStop").onclick = () => S.runProcId != null && stopProc(S.runProcId);
-  $("#btnTrain").onclick = train;
   $("#dataSource").value = localStorageGet("dataSource") || "live";
   if (!$("#dataSource").value) $("#dataSource").value = "live";
-  $("#dataSource").onchange = () => { localStorageSet("dataSource", $("#dataSource").value); updateDataDetail(); refreshFiles(); renderInspector(); };
+  $("#dataSource").onchange = () => {
+    localStorageSet("dataSource", $("#dataSource").value); updateDataDetail(); refreshFiles(); renderInspector(); renderTraining();
+  };
   $("#dataDetail").onchange = onDataDetailChange;
   // files copied into data/ while the page is open: pick them up when you come back or use the menus
   $("#dataDetail").onfocus = refreshFiles;
   window.addEventListener("focus", refreshFiles);
   $("#paletteSearch").oninput = renderPalette;
   $$(".tabs [data-tab]").forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
-  $("#btnCollapse").onclick = () => {
-    const c = $("#bottom").classList.toggle("collapsed");
-    $("#btnCollapse").textContent = c ? "▴" : "▾";
-  };
-  $("#btnStreams").onclick = refreshStreams;
-  $("#btnScopeWindow").onclick = () => MON.buf && openScopeWindow(MON.buf.name);
+  $("#btnCollapse").onclick = () => setBottomCollapsed(!$("#bottom").classList.contains("collapsed"));
   window.addEventListener("beforeunload", (e) => { if (S.dirty) { e.preventDefault(); e.returnValue = ""; } });
+}
+
+// ------------------------------------------------------------------ resizable panels
+// Splitters between palette | canvas | inspector and above the bottom panel. Sizes are CSS
+// variables, remembered per browser. A side panel dragged (nearly) shut hides completely and a
+// click on its splitter brings it back; the bottom panel collapses to its tab bar instead.
+const PANELS = {
+  pal: { css: "--pal-w", def: 236, min: 150, axis: "x", sign: 1 },
+  insp: { css: "--insp-w", def: 300, min: 220, axis: "x", sign: -1 },
+  bottom: { css: "--bottom-h", def: 290, min: 120, axis: "y", sign: -1 },
+};
+const SHUT_AT = 70;            // px: dragged smaller than this, a panel closes
+const CANVAS_MIN = 260;        // px of canvas that the side panels always leave free
+const layout = {};             // current sizes (0 = side panel hidden) and last open sizes (<key>Open)
+
+function setBottomCollapsed(c) {
+  $("#bottom").classList.toggle("collapsed", c);
+  $("#btnCollapse").textContent = c ? "▴" : "▾";
+}
+
+function maxPanel(key) {
+  if (key === "bottom") return Math.max(PANELS.bottom.min, window.innerHeight - $(".toolbar").offsetHeight - 140);
+  const other = key === "pal" ? layout.insp : layout.pal;
+  return Math.max(PANELS[key].min, window.innerWidth - (other || 0) - CANVAS_MIN);
+}
+
+function setPanel(key, size, save = true) {
+  const p = PANELS[key];
+  const shut = size < SHUT_AT;
+  if (!shut) size = Math.round(Math.min(maxPanel(key), Math.max(p.min, size)));
+  if (key === "bottom") {
+    setBottomCollapsed(shut);
+    if (!shut) layout.bottom = layout.bottomOpen = size;
+    document.documentElement.style.setProperty(p.css, layout.bottom + "px");
+  } else {
+    layout[key] = shut ? 0 : size;
+    if (!shut) layout[key + "Open"] = size;
+    document.documentElement.style.setProperty(p.css, layout[key] + "px");
+    document.body.classList.toggle(key + "-shut", shut);
+    $(`.splitter[data-panel="${key}"]`).title = shut ? "Click (or drag) to show this panel again"
+      : "Drag to resize · double-click to reset · drag shut to hide";
+  }
+  if (save) localStorageSet("layout", JSON.stringify(layout));
+}
+
+function setupSplitters() {
+  let saved = {};
+  try { saved = JSON.parse(localStorageGet("layout") || "{}") || {}; } catch { /* default sizes */ }
+  // first visit: default sizes, scaled down on a small screen
+  const first = {
+    pal: Math.min(PANELS.pal.def, 0.2 * window.innerWidth),
+    insp: Math.min(PANELS.insp.def, 0.24 * window.innerWidth),
+    bottom: Math.min(PANELS.bottom.def, 0.3 * window.innerHeight),
+  };
+  for (const key of Object.keys(PANELS)) {
+    layout[key] = first[key];
+    layout[key + "Open"] = saved[key + "Open"] || first[key];
+  }
+  for (const key of Object.keys(PANELS)) setPanel(key, saved[key] ?? first[key], false);
+  for (const sp of $$(".splitter")) {
+    const key = sp.dataset.panel, p = PANELS[key];
+    sp.addEventListener("mousedown", (ev) => {
+      if (ev.button !== 0) return;
+      ev.preventDefault();
+      const start = p.axis === "x" ? ev.clientX : ev.clientY;
+      const collapsed = key === "bottom" ? $("#bottom").classList.contains("collapsed") : layout[key] === 0;
+      const from = collapsed ? (key === "bottom" ? $("#bottom").offsetHeight : 0) : layout[key];
+      let moved = false;
+      document.body.classList.add(p.axis === "x" ? "splitting-x" : "splitting-y");
+      sp.classList.add("active");
+      drag((e) => {
+        const d = (p.axis === "x" ? e.clientX : e.clientY) - start;
+        if (Math.abs(d) > 3) moved = true;
+        if (moved) setPanel(key, from + p.sign * d, false);
+      }, () => {
+        document.body.classList.remove("splitting-x", "splitting-y");
+        sp.classList.remove("active");
+        if (!moved && collapsed) setPanel(key, layout[key + "Open"] || layout[key] || p.def);  // click reopens
+        else localStorageSet("layout", JSON.stringify(layout));
+      });
+    });
+    sp.addEventListener("dblclick", () => setPanel(key, p.def));
+  }
+  // a smaller window: shrink panels that no longer leave room for the canvas
+  window.addEventListener("resize", () => {
+    for (const key of ["pal", "insp"]) if (layout[key]) setPanel(key, layout[key], false);
+    if (!$("#bottom").classList.contains("collapsed")) setPanel("bottom", layout.bottom, false);
+  });
 }
 
 // ------------------------------------------------------------------ boot
 async function boot() {
-  const { nodes, estimators } = await api("/api/nodes");
+  setupSplitters();
+  const { nodes, estimators, aliases } = await api("/api/nodes");
   for (const sc of nodes) S.schemas[sc.type] = sc;
   S.estimators = estimators;
+  S.aliases = aliases || {};
   renderPalette();
   setupCanvas();
   setupToolbar();
@@ -1564,11 +1678,9 @@ async function boot() {
   }
   await refreshPipelines();
   const tab = localStorageGet("tab");
-  if (tab === "console" || tab === "monitor") showTab(tab);
+  if (tab === "console" || tab === "training") showTab(tab);
   setInterval(pollProcs, 1000);
   setInterval(pollLog, 500);
-  setInterval(pollMonitor, 120);
-  setInterval(pollMonitorEvents, 300);
   setInterval(pollMiniScopes, 250);
   requestAnimationFrame(frame);
   pollProcs();

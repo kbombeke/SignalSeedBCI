@@ -1,9 +1,16 @@
-name: In-ear gaze direction (EOG)
+# In-ear EOG from a recorded session (Exp2), replayed as if it came from the amplifier.
+#
+# Montage (BioSemi, 512 Hz): R_CAN_1-3 / L_CAN_1-3 in the ear canals, R_CON_1-3 /
+# L_CON_1-3 on the conchas, L_MASTOID / R_MASTOID, L_EARLOBE / R_EARLOBE, then A17-A32.
+# Everything is referenced to the left mastoid (which is then dropped), decimated to
+# 128 Hz and low-passed at 10 Hz, and shown unfiltered (display: none) with the triggers.
+#
+#   editor: Data > Replay a recording > data/<session>.bdf, then Run
+#   CLI:    signalseedbci replay data/<session>.bdf --loop      (terminal 1)
+#           signalseedbci run pipelines/Exp2_replay_attempt1.yaml  (terminal 2)
+name: Exp2 in-ear EOG (replay)
 
 nodes:
-  src:
-    type: LSLSource
-    params: {signal_name: BioSemi, marker_name: BioSemi-Triggers}
   ref:
     type: Rereference
     params: {ref: [L_MASTOID], drop_ref: true}
@@ -14,23 +21,26 @@ nodes:
     type: BandpassFilter
     params: {l_freq: null, h_freq: 10, order: 4}
   eog:
-    type: LSLSignalOut
+    type: DataVisualizer
     params: {name: signalseedbci-eog, type: EOG, display: none}
   names:
     type: RenameChannels
+  datainput:
+    type: LSLSource
+    params: {signal_name: BioSemi, marker_name: BioSemi-Triggers}
 
 edges:
   - ref.out -> down.in
   - down.out -> lowpass.in
   - lowpass.out -> eog.in
-  - src.markers -> eog.markers
-  - src.signal -> names.in
+  - datainput.markers -> eog.markers
+  - datainput.signal -> names.in
   - names.out -> ref.in
 
 layout:  # node positions in the editor: [x, y] or [x, y, width, view height]
-  src: [-183, -182]
   ref: [50, 54]
   down: [53, 175]
   lowpass: [53, 286]
   eog: [413, -186, 1031, 841]
   names: [46, -55]
+  datainput: [-183, -182]

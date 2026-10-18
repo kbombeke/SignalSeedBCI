@@ -1,4 +1,5 @@
 import time
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -98,6 +99,16 @@ def test_graph_rejects_bad_connections():
         Graph({"nodes": {"x": {"type": "BandpassFilter", "params": {"lfreq": 1}}}})
 
 
+def test_renamed_node_type_still_loads():
+    from signalseedbci.pipeline import REGISTRY
+    from signalseedbci.pipeline.nodes.sinks import DataVisualizer
+
+    graph = Graph({"nodes": {"src": {"type": "LSLSource"}, "out": {"type": "LSLSignalOut"}},
+                   "edges": ["src.signal -> out.in"]})
+    assert type(graph.nodes["out"]) is DataVisualizer and "LSLSignalOut" not in REGISTRY
+    assert DataVisualizer.schema()["title"] == "Data Visualizer"
+
+
 def test_model_input_mismatch_is_reported(tmp_path):
     calib = tmp_path / "calib_raw.fif"
     SyntheticEEG(seed=12).make_raw(200).save(calib, verbose="error")
@@ -141,11 +152,11 @@ def test_lsl_signal_out_republishes_markers():
 
     import pylsl
 
-    from signalseedbci.pipeline.nodes.sinks import LSLSignalOut
+    from signalseedbci.pipeline.nodes.sinks import DataVisualizer
     from signalseedbci.streams import FeaturesMeta, Features
 
     name = f"signalseedbci-test-{uuid.uuid4().hex[:6]}"
-    node = LSLSignalOut("out", {"name": name})
+    node = DataVisualizer("out", {"name": name})
     node.setup({"in": FeaturesMeta(["a", "b"]), "markers": None})
     info = pylsl.resolve_byprop("name", name + "-markers", timeout=5)
     assert info, "marker stream not published"
@@ -247,28 +258,6 @@ def test_eyes_pipeline_on_alpha_bursts(tmp_path):
     assert ctx.store["accuracy"]["state"] > 0.85
 
 
-def test_inear_eog_polarity_and_balance():
-    from signalseedbci.sources.inear import CHANNELS, InEarEOG
-
-    gen = InEarEOG(seed=4, blink_rate_hz=0)
-    data, events = gen.next(int(200 * gen.sfreq))
-    codes = [c for _, c in events]
-    assert sorted(set(codes)) == [1, 2, 3, 4] and max(codes.count(c) for c in (1, 2, 3, 4)) - min(codes.count(c) for c in (1, 2, 3, 4)) <= 1
-    x = data - data[CHANNELS.index("Neck")]
-    sf = gen.sfreq
-
-    def shift(code, ch):
-        vals = [x[CHANNELS.index(ch), i + int(0.6 * sf):i + int(1.0 * sf)].mean() - x[CHANNELS.index(ch), i - int(0.3 * sf):i].mean()
-                for i, c in events if c == code]
-        return float(np.mean(vals))
-
-    # looking right: right ear positive, left ear negative; left: the reverse; up: forehead positive
-    assert shift(4, "RC1") > 8 and shift(4, "LC1") < -8
-    assert shift(3, "LC1") > 8 and shift(3, "RC1") < -8
-    assert shift(1, "Fpz") > 25 and shift(2, "Fpz") < -25
-    assert abs(shift(1, "LC1")) < 0.5 * abs(shift(3, "LC1"))  # vertical is weak in the ear
-
-
 def test_time_window_means():
     from signalseedbci.pipeline.nodes.features import TimeWindowMeans
     from signalseedbci.streams import Epoch, EpochsMeta
@@ -284,25 +273,58 @@ def test_time_window_means():
         TimeWindowMeans("m", {"windows": [[0.5, 2.0]]}).setup({"in": EpochsMeta(info, -0.2, 120)})
 
 
-def test_inear_gaze_pipeline_train_and_evaluate(tmp_path):
-    from signalseedbci.sources.inear import InEarEOG
+EXP2 = "pipelines/Exp2_replay_attempt1.yaml"
+EXP2_CHANNELS = (["R_CAN_1", "R_CON_1", "R_CAN_2", "R_CON_2", "R_CAN_3", "R_CON_3",
+                  "L_CON_1", "L_CAN_1", "L_CON_2", "L_CAN_2", "L_CON_3", "L_CAN_3",
+                  "L_MASTOID", "R_MASTOID", "L_EARLOBE", "R_EARLOBE"] + [f"A{i}" for i in range(17, 33)])
 
-    calib, test = tmp_path / "calib_raw.fif", tmp_path / "test_raw.fif"
-    InEarEOG(seed=11).make_raw(240).save(calib, verbose="error")
-    InEarEOG(seed=11).make_raw(400).crop(240, None).save(test, verbose="error")  # same "subject", later trials
-    spec = yaml.safe_load(open("pipelines/inear_gaze.yaml"))
-    spec["nodes"]["clf"]["params"]["model_path"] = str(tmp_path / "gaze.joblib")
-    for k in ("gaze", "eog"):
-        spec["nodes"][k]["params"]["name"] += f"-test-{tmp_path.name[-6:]}"
-    p = tmp_path / "gaze.yaml"
+
+def _exp2_spec(tmp_path):
+    """The Exp2 pipeline with a unique output name and a Recorder on what it publishes."""
+    spec = yaml.safe_load(open(EXP2, encoding="utf-8"))
+    spec["nodes"]["eog"]["params"]["name"] += f"-test-{tmp_path.name[-6:]}"
+    spec["nodes"]["rec"] = {"type": "Recorder", "params": {"path": str(tmp_path / "out_raw.fif")}}
+    spec["edges"] += ["lowpass.out -> rec.in", "src.markers -> rec.markers"]
+    p = tmp_path / "exp2.yaml"
     p.write_text(yaml.safe_dump(spec))
-    ctx = RunContext(mode="train", realtime=False)
-    Graph.from_yaml(p, ctx, _source(calib)).run(verbose=False)
-    meta = ctx.store["classifiers"]["clf"].fit()
-    assert sorted(meta["class_counts"]) == ["down", "left", "right", "up"] and meta["cv_accuracy"] > 0.8
-    ctx = RunContext(mode="online", realtime=False)
-    Graph.from_yaml(p, ctx, _source(test)).run(verbose=False)
-    assert ctx.store["accuracy"]["log"] > 0.8
+    return p
+
+
+def test_exp2_replay_pipeline(tmp_path):
+    import mne
+
+    # a recording with the Exp2 montage: a slow, large drift common to every electrode
+    # (as with BioSemi's reference-free recording) on top of each channel's own 2 Hz wave
+    sf, n = 512.0, 512 * 30
+    t = np.arange(n) / sf
+    own = 20 * np.sin(2 * np.pi * 2 * t[None, :] + np.arange(len(EXP2_CHANNELS))[:, None])
+    common = 5000 + 300 * np.sin(2 * np.pi * 0.05 * t)
+    stim = np.zeros(n)
+    stim[int(5 * sf):int(5 * sf) + 6] = 12
+    info = mne.create_info(EXP2_CHANNELS + ["Status"], sf, ["eeg"] * len(EXP2_CHANNELS) + ["stim"])
+    rec = tmp_path / "exp2_raw.fif"
+    mne.io.RawArray(np.vstack([(own + common) * 1e-6, stim]), info, verbose="error").save(rec, verbose="error")
+
+    Graph.from_yaml(_exp2_spec(tmp_path), RunContext(mode="online", realtime=False), _source(rec)).run(verbose=False)
+    out = mne.io.read_raw(tmp_path / "out_raw.fif", preload=True, verbose="error")
+    assert out.info["sfreq"] == 128.0
+    assert out.ch_names == [c for c in EXP2_CHANNELS if c != "L_MASTOID"]  # referenced to it, then dropped
+    assert [a["description"] for a in out.annotations] == ["12"]
+    x = out.get_data()[:, int(5 * 128):] * 1e6  # after the filters have settled
+    expected = np.delete(own - own[EXP2_CHANNELS.index("L_MASTOID")], EXP2_CHANNELS.index("L_MASTOID"), axis=0)
+    assert np.abs(x).max() < 60  # the common drift is gone
+    # each channel keeps its own wave minus the mastoid's (the causal filters only delay it)
+    np.testing.assert_allclose(x.std(axis=1), expected.std(axis=1), rtol=0.1)
+
+
+@pytest.mark.skipif(not list(Path("data").glob("*.bdf")), reason="no BDF recording in data/")
+def test_exp2_pipeline_accepts_the_recorded_session(tmp_path):
+    rec = sorted(Path("data").glob("*.bdf"))[0].resolve()
+    graph = Graph.from_yaml(_exp2_spec(tmp_path), RunContext(mode="online", realtime=False), _source(rec))
+    graph.setup()
+    assert graph.meta[("lowpass", "out")].sfreq == 128.0
+    assert "L_MASTOID" not in graph.meta[("lowpass", "out")].ch_names
+    graph.close()
 
 
 def test_rename_channels_mapping_checks(capsys):

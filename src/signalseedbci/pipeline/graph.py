@@ -24,7 +24,7 @@ from pathlib import Path
 import yaml
 
 from . import nodes as _nodes  # noqa: F401  (registers built-in nodes)
-from .node import REGISTRY, Node, RunContext
+from .node import ALIASES, REGISTRY, Node, RunContext
 
 
 @dataclass(frozen=True)
@@ -56,7 +56,7 @@ class Graph:
         self.base_dir = base_dir or Path.cwd()
         self.nodes: dict[str, Node] = {}
         for nid, nspec in (spec.get("nodes") or {}).items():
-            ntype = nspec.get("type")
+            ntype = ALIASES.get(nspec.get("type"), nspec.get("type"))
             if ntype not in REGISTRY:
                 raise ValueError(f"Node '{nid}': unknown type {ntype!r}. Available: {sorted(REGISTRY)}")
             params = self._resolve_paths(REGISTRY[ntype], dict(nspec.get("params") or {}))

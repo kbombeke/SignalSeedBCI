@@ -72,13 +72,9 @@ def cmd_bridge(args) -> None:
 
 
 def cmd_synth(args) -> None:
-    if args.paradigm == "eye-movements":
-        from .sources.inear import InEarEOG
-        gen = InEarEOG(sfreq=args.sfreq, seed=args.seed)
-    else:
-        from .sources.synthetic import SyntheticEEG
-        gen = SyntheticEEG(args.preset, sfreq=args.sfreq, seed=args.seed, raw_labels=not args.names_1020,
-                           paradigm=args.paradigm, burst_s=args.burst_s, period_s=args.period_s)
+    from .sources.synthetic import SyntheticEEG
+    gen = SyntheticEEG(args.preset, sfreq=args.sfreq, seed=args.seed, raw_labels=not args.names_1020,
+                       paradigm=args.paradigm, burst_s=args.burst_s, period_s=args.period_s)
     if args.record:
         raw = gen.make_raw(args.duration or 300.0)
         Path(args.record).parent.mkdir(parents=True, exist_ok=True)
@@ -276,9 +272,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--names-1020", action="store_true", help="10-20 channel names instead of A1..")
     s.add_argument("--duration", type=float, help="Seconds (streaming: stop after; --record: length)")
     s.add_argument("--record", help="Write a .fif recording instead of streaming")
-    s.add_argument("--paradigm", default="motor-imagery", choices=["motor-imagery", "alpha-bursts", "eye-movements"],
-                   help="motor-imagery: left/right cues 1/2; alpha-bursts: alpha on (1) / off (2); "
-                        "eye-movements: 16-channel in-ear montage, look up/down/left/right cues 1-4")
+    s.add_argument("--paradigm", default="motor-imagery", choices=["motor-imagery", "alpha-bursts"],
+                   help="motor-imagery: left/right cues 1/2; alpha-bursts: alpha on (1) / off (2)")
     s.add_argument("--burst-s", type=float, default=10.0, help="alpha-bursts: burst length (s)")
     s.add_argument("--period-s", type=float, default=20.0, help="alpha-bursts: one burst every N s")
     s.set_defaults(func=cmd_synth)

@@ -221,7 +221,6 @@ current folder (`pipelines/`, `data/`, `models/`). Options: `--port 8766`,
 | Pipeline list, New, Save, Save as… | Open, create and save pipelines (YAML in `pipelines/`). ⌘S saves. |
 | Validation | ✓ valid, or the first problem (hover for all). Problem nodes get a red outline. |
 | **Data** | Where the data comes from when you press Run (see below). |
-| **Train…** | Fits the pipeline's `Classifier` nodes, and reports the cross-validated accuracy: on the recordings you tick, or on a **live session** from the current Data source (see [Training on live data](#training-on-live-data)). |
 | **▶ Run / ■ Stop** | Starts the pipeline together with its data source; Stop ends both. |
 
 **Data choices**
@@ -256,12 +255,13 @@ Your own recordings appear automatically when you put them in the project, e.g. 
 
 **Live views inside nodes**
 
-- **LSLSignalOut**: a plot of what it publishes, with markers if connected.
+- **Data Visualizer**: a plot of the signal or features it receives, with markers if connected.
 - **SpectrumOut**: the live frequency spectrum with the peak frequency. Its window switches
   between spectrum and spectrogram.
 - **EyesFeedback**: animated eyes (closed / open), with a full-screen window for a participant.
 - **GazeFeedback**: animated eyes that look up / down / left / right as classified.
-- LSLSignalOut has a **display** setting (1–40 Hz, high-pass, or none) for its plots only;
+  (No example pipeline uses it at the moment.)
+- The Data Visualizer has a **display** setting (1–40 Hz, high-pass, or none) for its plots only;
   use *none* for slow signals such as EOG.
 
 Click **⧉** on such a node (or double-click the plot) to open it in its own window, or
@@ -269,9 +269,14 @@ enlarge the node itself by dragging its corner.
 
 **Bottom panel**
 
-- **Console**: output of runs, training and created recordings, with Stop buttons.
-- **Monitor**: every LSL stream on the network, a plot of any of them (display filter,
-  scale, window, channel pages, ⧉ window) and incoming markers and predictions.
+- **Console**: output of runs, training and created recordings, with Stop buttons. Each
+  process is tagged with its role. A ▶ Run usually shows **two** processes: the *data source*
+  (the replay, synthetic EEG or simulated amplifier, publishing LSL streams exactly like a real
+  amplifier) and the *pipeline* that reads them. They are linked: stopping one stops both. With
+  *Amplifier / bridge (live)* only the pipeline starts; *Recording, offline* reads the file
+  inside the pipeline.
+- **Training**: train the pipeline's `Classifier` nodes, see
+  [Training a classifier](#training-a-classifier).
 
 ## Example pipelines
 
@@ -280,7 +285,7 @@ enlarge the node itself by dragging its corner.
 | `eyes_alpha.yaml` | Eyes close when posterior alpha is high and open when it is low (ThresholdClassifier, no training). Reports how often its decision matches trigger markers. | alpha-bursts data, or a real eyes-open/closed session |
 | `alpha_neurofeedback.yaml` | Relative alpha power as a live stream (`signalseedbci-alpha`) plus a live spectrum (`signalseedbci-spectrum`). | any EEG |
 | `motor_imagery.yaml` | Left- vs right-hand imagery with CSP + LDA; predictions on `signalseedbci-predictions`. | training first (below) |
-| `inear_gaze.yaml` | Gaze direction (up / down / left / right) from in-ear EOG: animated eyes look where the classifier says, plus a live EOG plot. | training first (below) |
+| `Exp2_replay_attempt1.yaml` | In-ear EOG from a recorded session: referenced to the left mastoid, 128 Hz, low-passed at 10 Hz, plotted live with the triggers. | an Exp2 in-ear recording (BDF) |
 
 Motor imagery, trained and tested on synthetic data:
 
@@ -292,24 +297,36 @@ signalseedbci run pipelines/motor_imagery.yaml --offline data/test_raw.fif
 ```
 
 In the editor this is Data › *Replay a recording* › ＋ Create synthetic recording
-(motor imagery), then **Train…**, then **▶ Run**.
+(motor imagery), then the **Training** tab › *Train on recordings*, then **▶ Run**.
 
-### Training on live data
+### Training a classifier
 
-With a participant connected you usually calibrate first: the participant follows cues
-(e.g. left / right) while the classifier collects labelled epochs, and the model is fitted
-at the end. In the editor:
+Pipelines with a `Classifier` node must learn from labelled data before ▶ Run can use them
+(pipelines without one, such as `eyes_alpha.yaml`, run directly). How it works:
 
-1. Set **Data** to *Amplifier / bridge (live)* (or a simulation, to try it out).
-2. **Train…** › **Live session** › Train. The status shows *● calibrating*.
-3. Present the cues from your stimulus program (trigger port or LSL markers), as many trials
-   as you want per class.
-4. Press **■ Stop**. The pipeline fits every `Classifier` and reports the cross-validated
-   accuracy, and saves the raw session as `data/calib_<pipeline>_<date-time>_raw.fif`.
-5. Press **▶ Run** for online use with the new model.
+1. **Labels come from markers.** The `Epocher` before the classifier cuts an epoch after each
+   marker in its `events` and labels it, e.g. marker `1` → `left`, `2` → `right`.
+2. **Training runs the pipeline** over data with exactly the same preprocessing as ▶ Run,
+   collects every labelled example that reaches a `Classifier`, fits it, and reports the
+   cross-validated accuracy (an estimate of the accuracy on new data).
+3. **The model is saved** in the classifier's `model_path`; ▶ Run loads it. Retrain after
+   changing anything before the classifier (channels, filters, epoch times): the model
+   refuses input that differs from what it was trained on.
 
-The saved session can be used to retrain later (e.g. after changing the filter settings)
-without a new calibration: tick it in **Train…** › Recordings. On the command line:
+In the editor, open the **Training** tab at the bottom. It lists the pipeline's classifiers
+(trained or not, accuracy, which markers give which labels) and offers two ways to train:
+
+- **1 · Train on recordings**: tick one or more files in the project (e.g. in `data/`) and
+  click *Train on ticked recordings*. The pipeline runs over them as fast as possible; the
+  examples of all files are pooled. The output appears in the Console.
+- **2 · Train on a live session** (calibration): set **Data** in the toolbar to *Amplifier /
+  bridge (live)* (or a simulation, to try it out), click *Start live calibration* (the status
+  shows *● calibrating*), present the cues from your stimulus program (trigger port or LSL
+  markers), then click *Stop and train*. The classifiers are fitted, and the raw session is
+  saved as `data/calib_<pipeline>_<date-time>_raw.fif`, so you can retrain on it later
+  (e.g. after changing the filters) with option 1, without a new calibration.
+
+Then press **▶ Run** for online use with the new model. On the command line:
 
 ```bash
 signalseedbci train pipelines/motor_imagery.yaml --live                 # until Ctrl+C
@@ -317,33 +334,24 @@ signalseedbci train pipelines/motor_imagery.yaml --live --duration 300  # or a f
 signalseedbci train pipelines/motor_imagery.yaml --data data/calib_motor_imagery_20261014-153000_raw.fif
 ```
 
-### In-ear gaze direction
+### In-ear EOG (Exp2 replay)
 
-The synthetic *eye-movements* data simulates a 16-channel in-ear montage: 12 in-ear
-electrodes (LC1-3 / RC1-3 on the concha, LE1-3 / RE1-3 in the ear canal of the left /
-right ear) and references M1 / M2 (mastoids), Fpz (forehead) and Neck. Cues 1-4 ask to
-look up / down / left / right; the eyes move ~0.25 s later and hold ~1.2 s. Eye movements
-follow the corneo-retinal dipole: looking right makes the right ear more positive and the
-left ear more negative; vertical movements mainly reach the forehead.
+`Exp2_replay_attempt1.yaml` replays a recorded in-ear session (BioSemi BDF, 512 Hz) as if
+it came from the amplifier. The montage: R_CAN_1-3 / L_CAN_1-3 in the ear canals,
+R_CON_1-3 / L_CON_1-3 on the conchas, L_MASTOID / R_MASTOID, L_EARLOBE / R_EARLOBE, then
+the unused A17-A32. The pipeline references everything to the left mastoid (and drops it),
+decimates to 128 Hz, low-passes at 10 Hz and plots the result unfiltered (`display: none`)
+with the triggers from the `Status` channel. Its `RenameChannels` node is the place to
+relabel channels if a session uses other names.
 
-The pipeline references everything to the neck, low-passes at 10 Hz, cuts an epoch around
-each cue and classifies the mean amplitude per electrode in two windows (**TimeWindowMeans**)
-with shrinkage LDA. **GazeFeedback** shows eyes that look in the predicted direction.
+Recordings stay out of git: put the BDF in `data/`. In the editor: open
+`Exp2_replay_attempt1.yaml`, set Data to *Replay a recording* › your BDF, press ▶ Run,
+and click ⧉ on the `eog` node. On the command line:
 
 ```bash
-signalseedbci synth --paradigm eye-movements --duration 300 --seed 1 --record data/eye_movements_300s_raw.fif
-signalseedbci train pipelines/inear_gaze.yaml --data data/eye_movements_300s_raw.fif
-signalseedbci run pipelines/inear_gaze.yaml --offline data/eye_movements_session2_raw.fif
+signalseedbci replay data/<session>.bdf --loop                # terminal 1
+signalseedbci run pipelines/Exp2_replay_attempt1.yaml         # terminal 2
 ```
-
-Results on synthetic data: ~98% cross-validated; 100% on a second session of the same
-simulated person, ~94% on a different simulated person. With **in-ear electrodes only**
-(drop Fpz, or Fpz and the mastoids, with a PickChannels node) left/right stays reliable
-but up/down gets confused (77% / 60%), because vertical eye movements barely reach the ear.
-
-In the editor: open `inear_gaze.yaml`, set Data to *Replay a recording* ›
-`data/eye_movements_session2_raw.fif` (or *Synthetic EEG* › *Eye movements*, which simulates
-a new person each time), press ▶ Run, and click ⧉ on the `gaze` node.
 
 ## Recording with the BioSemi ActiveTwo
 
@@ -406,7 +414,7 @@ On first use, check that the bridge reports the right speed mode, channel count 
 - **Recording**: record whole sessions (all streams) with [LabRecorder](https://github.com/labstreaminglayer/App-LabRecorder)
   to XDF; SignalSeedBCI reads XDF files for replay and training. Alternatively, add a
   `Recorder` node to save a pipeline's signal and markers as a `.fif` file, or calibrate
-  with [Train… › Live session](#training-on-live-data), which saves the raw session.
+  with [Training › Train on a live session](#training-a-classifier), which saves the raw session.
 
 ## Command line
 
@@ -423,7 +431,7 @@ The commands are the same on macOS and Windows; run them in the activated enviro
 | `signalseedbci train P.yaml --data REC [REC…]` | Fit the Classifier nodes; prints CV accuracy |
 | `signalseedbci train P.yaml --live [--duration S]` | Calibrate on the live streams until stopped, then fit; saves the raw session in `data/` |
 | `signalseedbci replay REC [--loop]` | Publish a recording as LSL streams (like an amplifier) |
-| `signalseedbci synth [--paradigm alpha-bursts\|eye-movements] [--record FILE --duration S]` | Stream synthetic EEG, or write a synthetic recording |
+| `signalseedbci synth [--paradigm alpha-bursts] [--record FILE --duration S]` | Stream synthetic EEG, or write a synthetic recording |
 | `signalseedbci bridge biosemi [--fake]` | BioSemi ActiveTwo (USB) → LSL; `--fake` simulates the amplifier |
 | `signalseedbci bridge actiview --tcp-channels N --sfreq F` | ActiView TCP server → LSL |
 | `signalseedbci discover [--check]` | List LSL streams on the network (with clock offsets and rates) |
@@ -572,7 +580,7 @@ signal shifts and stays shifted while the gaze is held.
   - `xdawn_ts_lr`: xDAWN + tangent space, for ERPs / P300 (epochs)
   - `lda`: shrinkage LDA on feature vectors (BandPower, TimeWindowMeans)
   - `file.py:function`: your own estimator
-- `model_path`: where **Train…** saves the model and Run loads it. The inspector shows whether
+- `model_path`: where training saves the model and Run loads it. The inspector shows whether
   it is trained and its cross-validated accuracy (`cv_folds`, 5).
 - The model remembers the channels, sampling rate and epoch length it was trained on. If a
   pipeline feeds it something different, it refuses to run and explains why, rather than
@@ -613,8 +621,9 @@ Nodes marked ▣ show a **live view in their node box** while the pipeline runs.
 **⧉** (or double-click the view) to open it in its own window, or drag the node's corner to
 enlarge it.
 
-**LSLSignalOut** ▣: publishes a signal or feature vectors as an LSL stream for other
-programs, and plots it.
+**Data Visualizer** ▣ (`DataVisualizer` in pipeline files; the old name `LSLSignalOut` still
+works): plots a signal or feature vectors live in the editor, and publishes them as an LSL
+stream for other programs.
 - Inputs: `in` (signal or features), `markers` (optional: republished as `<name>-markers` and
   drawn as event lines)
 - `name` (`signalseedbci-out`), `type` (`EEG`)
@@ -690,7 +699,7 @@ pipeline stops.
 | "No LSL stream … found" | Is the bridge, replay or synthetic source running? `signalseedbci discover` lists what the Mac sees. Across machines, see step 3 of the BioSemi section. |
 | Warning "A stream named 'BioSemi' is already on the network" | A real or simulated amplifier is still streaming. The pipeline may connect to that one; stop it, or rename a stream. |
 | Editor: "Address already in use" | Another editor is running; use `signalseedbci gui --port 8766`. |
-| "not trained yet" on a Classifier | Use **Train…** (or `signalseedbci train`) before running. |
+| "not trained yet" on a Classifier | Train it in the **Training** tab (or `signalseedbci train`) before running. |
 | "model was trained on different input" | The channels, rate or epoch settings changed since training: retrain. |
 | Eyes don't react at first | The ThresholdClassifier calibrates itself and starts once it has seen both low and high alpha. Begin with an eyes-open/eyes-closed block, or set a fixed threshold. |
 | Windows: the editor or bridge can't see the other machine's streams | The network may be *Public*: rerun `install.ps1 -AllowPublic` as Administrator, or set the network to Private in Windows Settings. |

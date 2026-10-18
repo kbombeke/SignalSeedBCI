@@ -32,7 +32,7 @@ nodes:
     type: BandPower
     params: {bands: {alpha: [8, 12]}, relative: true, log: false}
   out:
-    type: LSLSignalOut
+    type: DataVisualizer
     params: {name: signalseedbci-alpha, type: Feedback}
   spectrum:
     type: SpectrumOut

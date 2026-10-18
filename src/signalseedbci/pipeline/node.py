@@ -14,6 +14,8 @@ from types import SimpleNamespace
 from typing import Any, ClassVar
 
 REGISTRY: dict[str, type["Node"]] = {}
+# old type names still accepted in pipeline files -> current name
+ALIASES: dict[str, str] = {"LSLSignalOut": "DataVisualizer"}
 
 
 @dataclass
@@ -47,6 +49,7 @@ def _first_paragraph(doc: str | None) -> str:
 
 class Node:
     category: ClassVar[str] = "misc"
+    title: ClassVar[str] = ""  # name shown in the editor (default: the type)
     description: ClassVar[str] = ""
     inputs: ClassVar[dict[str, str]] = {}
     outputs: ClassVar[dict[str, str]] = {}
@@ -101,6 +104,7 @@ class Node:
     def schema(cls) -> dict:
         return {
             "type": cls.__name__,
+            "title": cls.title or cls.__name__,
             "category": cls.category,
             "description": cls.description or _first_paragraph(cls.__doc__),
             "inputs": cls.inputs,

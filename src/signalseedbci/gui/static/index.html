@@ -44,7 +44,6 @@
     </select>
     <select id="dataDetail" hidden></select>
     <span id="runStatus" class="run-status" hidden></span>
-    <button id="btnTrain" title="Fit the Classifier nodes on recordings">Train…</button>
     <button id="btnRun" class="primary">▶ Run</button>
     <button id="btnStop" class="danger" hidden>■ Stop</button>
   </div>
@@ -56,6 +55,7 @@
     <div id="paletteList"></div>
     <p class="hint">Drag onto the canvas, or click to add.</p>
   </aside>
+  <div class="splitter v" data-panel="pal" title="Drag to resize · double-click to reset · drag shut to hide"></div>
 
   <section id="canvasWrap" class="canvas-wrap" tabindex="0">
     <div id="canvas" class="canvas">
@@ -70,14 +70,16 @@
     </div>
     <div class="legend" id="legend"></div>
   </section>
+  <div class="splitter v" data-panel="insp" title="Drag to resize · double-click to reset · drag shut to hide"></div>
 
   <aside id="inspector" class="inspector"></aside>
 </main>
 
+<div class="splitter h" data-panel="bottom" title="Drag to resize · double-click to reset · drag shut to hide"></div>
 <section class="bottom" id="bottom">
   <nav class="tabs">
     <button data-tab="console" class="active">Console</button>
-    <button data-tab="monitor">Monitor</button>
+    <button data-tab="training" title="Train the pipeline's Classifier nodes on recordings or a live session">Training</button>
     <div class="spacer"></div>
     <button id="btnCollapse" title="Collapse / expand">▾</button>
   </nav>
@@ -87,29 +89,8 @@
     <pre class="log" id="log"></pre>
   </div>
 
-  <div class="tab-body" data-body="monitor" hidden>
-    <div class="stream-list">
-      <div class="row-head"><span>LSL streams</span><button id="btnStreams">Refresh</button></div>
-      <div id="streamList"><p class="muted">Click Refresh.</p></div>
-    </div>
-    <div class="scope">
-      <div class="scope-tools">
-        <span id="scopeTitle" class="muted">Select a numeric stream to plot</span>
-        <div class="spacer"></div>
-        <label>Display <select id="scopeFilter"><option value="bandpass" selected>1–40 Hz + notch</option><option value="highpass">high-pass 0.5 Hz</option><option value="none">raw</option></select></label>
-        <label>Plot <select id="scopeMode"><option value="auto">auto</option><option value="stack">stacked</option><option value="overlay">overlaid</option></select></label>
-        <label>Scale <select id="scopeScale"><option>auto</option><option>10</option><option>25</option><option selected>50</option><option>100</option><option>250</option><option>1000</option></select> µV</label>
-        <label>Window <select id="scopeWin"><option>2</option><option selected>5</option><option>10</option><option>30</option><option>60</option></select> s</label>
-        <label>Channels <select id="scopePage"></select></label>
-        <button id="btnScopeWindow" title="Open in a separate window" hidden>⧉ Window</button>
-      </div>
-      <canvas id="scopeCanvas"></canvas>
-    </div>
-    <div class="events">
-      <div class="row-head"><span>Events & predictions</span></div>
-      <div id="probaBars"></div>
-      <ol id="eventList" class="event-list"></ol>
-    </div>
+  <div class="tab-body training" data-body="training" hidden>
+    <div id="trainingPanel" class="cards"></div>
   </div>
 </section>
 

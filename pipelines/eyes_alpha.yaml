@@ -39,7 +39,7 @@ nodes:
     type: EyesFeedback
     params: {name: signalseedbci-eyes, closed_label: closed}
   alphaplot:
-    type: LSLSignalOut
+    type: DataVisualizer
     params: {name: signalseedbci-alpha, type: Feedback}
 
 edges:

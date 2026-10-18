@@ -1,4 +1,4 @@
-/* Shared LSL stream plotting for the editor (node plots, Monitor tab) and the
+/* Shared LSL stream plotting for the editor (live views inside nodes) and the
  * stand-alone scope window. No dependencies. */
 "use strict";
 
