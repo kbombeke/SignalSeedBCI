@@ -327,7 +327,7 @@ body.splitting-y, body.splitting-y * { cursor: row-resize !important; user-selec
 .mini-status.live { color: var(--ok); }
 
 /* ---------- data source picker */
-.data-label { color: var(--muted); font-size: 12px; }
+.data-label { color: var(--muted); font-size: 12px; white-space: nowrap; }
 #dataSource { width: 200px; }
 #dataDetail { width: 220px; }
 .run-status { font-size: 12px; color: var(--ok); white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
