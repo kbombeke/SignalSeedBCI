@@ -283,3 +283,148 @@ class Recorder(Node):
         path.parent.mkdir(parents=True, exist_ok=True)
         raw.save(path, overwrite=True, verbose="error")
         self.log(f"saved {data.shape[1] / self.info.sfreq:.1f} s, {len(self.markers)} markers to {path}")
+
+
+BDF_LSB_UV = 0.03125  # 1 bit = 31.25 nV: ActiView's ±262144 µV over the 24-bit range
+BDF_PULSE_S = 0.01  # how long a marker's code stays in Status when it is rebuilt from markers
+
+
+def _bdf_header(labels: list[str], n_samples: int, start: time.struct_time, n_records: int = -1) -> bytes:
+    """BDF header laid out exactly as ActiView writes it; the last label is the Status channel."""
+
+    def field(value, width: int) -> bytes:
+        return str(value)[:width].ljust(width).encode("ascii", "replace")
+
+    n = len(labels)
+    head = (b"\xffBIOSEMI" + field("", 80) + field("", 80) + field(time.strftime("%d.%m.%y", start), 8)
+            + field(time.strftime("%H.%M.%S", start), 8) + field(256 * (n + 1), 8) + field("24BIT", 44)
+            + field(n_records, 8) + field(1, 8) + field(n, 4))
+    lowpass = f"HP: DC; LP: {round(n_samples * 0.2035)} Hz"  # the ActiveTwo's decimation filter
+    eeg = ["Active Electrode", "uV", -262144, 262143, -8388608, 8388607, lowpass, n_samples, "MON"]
+    status = ["Triggers and Status", "Boolean", -8388608, 8388607, -8388608, 8388607, "No filtering", n_samples, "TRI"]
+    rows = [[lab, *eeg] for lab in labels[:-1]] + [[labels[-1], *status]]
+    widths = (16, 80, 8, 8, 8, 8, 8, 80, 8, 32)
+    return head + b"".join(field(row[i], w) for i, w in enumerate(widths) for row in rows)
+
+
+class BDFRecorder(Node):
+    """Record the signal to a BioSemi .bdf file, the way ActiView does: 24 bit at 31.25 nV,
+    1-second data records, the same header, and a 'Status' channel at the end.
+
+    Connect it straight to the source so the file holds the raw, reference-free data. If the
+    signal has a 'Status' channel (bridge started with --status) it is written as it is: the
+    full status word, as in ActiView. Otherwise Status is rebuilt from the markers (numeric
+    codes, each held for 10 ms). The file is written while recording and stays readable if the
+    program stops unexpectedly. A last incomplete second is not saved, as in ActiView."""
+
+    category = "outputs"
+    title = "BDF Recorder"
+    inputs = {"in": "signal", "markers": "markers"}
+    optional_inputs = {"markers"}
+    params = {
+        "path": Param("recording_{time}.bdf", "path", "Output .bdf file; {time} becomes the start time "
+                      "(YYYYmmdd-HHMMSS). An existing file is never overwritten"),
+    }
+
+    def setup(self, in_meta):
+        info = in_meta["in"]
+        self.active = not (self.context.mode == "train" and not self.context.realtime)
+        if not float(info.sfreq).is_integer():
+            raise ValueError(f"{self.id}: BDF needs an integer sampling rate, got {info.sfreq:g} Hz")
+        self.ns = int(info.sfreq)
+        self.status_idx = next((i for i, (c, t) in enumerate(zip(info.ch_names, info.ch_types))
+                                if c == "Status" or t == "stim"), None)
+        self.sig_idx = [i for i in range(info.n_channels) if i != self.status_idx]
+        self.labels = [info.ch_names[i] for i in self.sig_idx] + ["Status"]
+        self.pulse_n = max(2, round(BDF_PULSE_S * info.sfreq))
+        self.dig = np.zeros((len(self.sig_idx), 0), np.int64)
+        self.stat = np.zeros(0, np.int64)
+        self.times = np.zeros(0)
+        self.events: list[list] = []  # [time, code, written] from the markers input
+        self.n_records = self.n_triggers = self.n_late = self.n_text = self.n_clipped = 0
+        self.file = None
+        if not self.active:
+            return {}
+        self.path = Path(self.p.path.replace("{time}", time.strftime("%Y%m%d-%H%M%S")))
+        if self.path.exists():
+            raise ValueError(f"{self.id}: {self.path} already exists; choose another path (or use {{time}})")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.file = open(self.path, "wb")
+        self.log(f"recording {len(self.labels)} channels ({len(self.sig_idx)} + Status) @ {self.ns} Hz to "
+                 f"{self.path}; Status from {'the Status channel' if self.status_idx is not None else 'markers'}")
+        return {}
+
+    def process(self, inputs):
+        if not self.active:
+            return {}
+        for m in inputs.get("markers", []):
+            try:
+                code = int(m.value)
+            except ValueError:
+                self.n_text += 1  # e.g. text markers from PsychoPy: no place for them in Status
+                continue
+            self.n_triggers += 1
+            if self.status_idx is None:
+                self.events.append([m.time, code & 0xFFFFFF, False])
+        for c in inputs["in"]:
+            if not c.n_samples:
+                continue
+            if self.file.tell() == 0:
+                self.file.write(_bdf_header(self.labels, self.ns, time.localtime()))
+            d = np.round(c.data[self.sig_idx] / BDF_LSB_UV)
+            clipped = np.abs(d) > 2 ** 23 - 1
+            if clipped.any():
+                self.n_clipped += int(clipped.sum())
+                d = np.clip(d, -2 ** 23, 2 ** 23 - 1)
+            self.dig = np.concatenate([self.dig, d.astype(np.int64)], axis=1)
+            st = (np.round(c.data[self.status_idx]).astype(np.int64) if self.status_idx is not None
+                  else np.zeros(c.n_samples, np.int64))
+            self.stat = np.concatenate([self.stat, st])
+            self.times = np.concatenate([self.times, c.times])
+        # keep one second in hand so that markers arriving a little after their samples still fit
+        while self.times.size >= 2 * self.ns:
+            self._write_record()
+        return {}
+
+    def _write_record(self) -> None:
+        ns, half = self.ns, 0.5 / self.ns
+        t = self.times[:ns]
+        stat = self.stat[:ns].copy()
+        for ev in self.events:
+            hit = (t >= ev[0] - half) & (t < ev[0] + (self.pulse_n - 0.5) / self.ns)
+            if hit.any():
+                stat[hit] = ev[1]
+                ev[2] = True
+        done = [ev for ev in self.events if ev[0] + self.pulse_n / self.ns < t[-1]]
+        self.n_late += sum(not ev[2] for ev in done)
+        self.events = [ev for ev in self.events if ev not in done]
+        values = np.vstack([self.dig[:, :ns], stat[None]]) & 0xFFFFFF  # 24-bit two's complement
+        raw = np.stack([values & 0xFF, (values >> 8) & 0xFF, values >> 16], axis=-1).astype(np.uint8)
+        self.file.write(raw.tobytes())
+        self.n_records += 1
+        self.file.seek(236)  # number of records, kept up to date so the file is always complete
+        self.file.write(str(self.n_records).ljust(8).encode())
+        self.file.seek(0, 2)
+        self.file.flush()
+        self.dig, self.stat, self.times = self.dig[:, ns:], self.stat[ns:], self.times[ns:]
+
+    def close(self):
+        if self.file is None:
+            return
+        while self.times.size >= self.ns:
+            self._write_record()
+        self.file.close()
+        self.file = None
+        if self.n_records == 0:
+            self.path.unlink(missing_ok=True)
+            self.log("nothing recorded (less than 1 s of data); no file written")
+            return
+        notes = [f"{self.times.size / self.ns:.2f} s at the end not saved (incomplete record)"] if self.times.size else []
+        if self.n_late:
+            notes.append(f"{self.n_late} markers arrived too late for Status")
+        if self.n_text:
+            notes.append(f"{self.n_text} non-numeric markers not saved")
+        if self.n_clipped:
+            notes.append(f"{self.n_clipped} samples beyond ±262144 µV clipped")
+        self.log(f"saved {self.n_records} s, {self.n_triggers} triggers to {self.path}"
+                 + (f" ({'; '.join(notes)})" if notes else ""))

@@ -447,8 +447,8 @@ def run_biosemi_bridge(driver, n_electrodes: int | None = None, use_ex: bool = T
 
             uv = frames_to_uv(frames)[:, picks]
             trig = ((status_words >> 8) & 0xFFFF).astype(np.int64)
-            if include_status:
-                uv = np.column_stack([uv, trig])
+            if include_status:  # the whole 24-bit status word, as ActiView stores it in a BDF file
+                uv = np.column_stack([uv, (status_words >> 8) & 0xFFFFFF])
             flags = (st["cms_in_range"], st["battery_low"])
             if flags != last_flags:
                 if not st["cms_in_range"]:

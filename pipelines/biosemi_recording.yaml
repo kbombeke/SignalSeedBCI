@@ -1,0 +1,34 @@
+# Record the BioSemi ActiveTwo as ActiView does: a .bdf file with every channel unchanged
+# (reference-free, full sampling rate, 24 bit at 31.25 nV), 1-second records and a Status
+# channel with the triggers. Files open in ActiView, EEGLAB, MNE (read_raw_bdf), BESA, ...
+#
+# Start the bridge with --status so Status holds the amplifier's full status word, exactly
+# as in an ActiView file (triggers in bits 0-15, CMS / battery / speed mode above):
+#   signalseedbci bridge biosemi --channels 64 --status
+# Without --status, Status is rebuilt from the trigger markers (each code held for 10 ms).
+#
+# Every Run writes a new file data/recording_<time>.bdf; Stop finishes it. The plot shows the
+# signal (display filter only; the file is unfiltered) with the triggers.
+name: BioSemi recording (BDF, as ActiView)
+
+nodes:
+  src:
+    type: LSLSource
+    params: {signal_name: BioSemi, marker_name: BioSemi-Triggers}
+  bdf:
+    type: BDFRecorder
+    params: {path: '../data/recording_{time}.bdf'}
+  view:
+    type: DataVisualizer
+    params: {name: signalseedbci-recording, type: EEG, display: bandpass}
+
+edges:
+  - src.signal -> bdf.in
+  - src.markers -> bdf.markers
+  - src.signal -> view.in
+  - src.markers -> view.markers
+
+layout:  # node positions in the editor: [x, y] or [x, y, width, view height]
+  src: [30, 30]
+  bdf: [300, 30]
+  view: [300, 160, 640, 360]
