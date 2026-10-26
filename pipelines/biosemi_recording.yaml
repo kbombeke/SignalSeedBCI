@@ -12,23 +12,32 @@
 name: BioSemi recording (BDF, as ActiView)
 
 nodes:
-  src:
-    type: LSLSource
-    params: {signal_name: BioSemi, marker_name: BioSemi-Triggers}
-  bdf:
+  Downsample:
+    type: Decimate
+  BDF:
     type: BDFRecorder
     params: {path: '../data/recording_{time}.bdf'}
-  view:
+  DataVisualizer:
     type: DataVisualizer
     params: {name: signalseedbci-recording, type: EEG, display: bandpass}
+  Source:
+    type: LSLSource
+    params: {signal_name: BioSemi, marker_name: BioSemi-Triggers}
+  spectrum:
+    type: SpectrumOut
 
 edges:
-  - src.signal -> bdf.in
-  - src.markers -> bdf.markers
-  - src.signal -> view.in
-  - src.markers -> view.markers
+  - Source.markers -> BDF.markers
+  - Source.markers -> DataVisualizer.markers
+  - Source.signal -> Downsample.in
+  - Downsample.out -> BDF.in
+  - Downsample.out -> DataVisualizer.in
+  - Downsample.out -> spectrum.in
+  - Source.markers -> spectrum.markers
 
 layout:  # node positions in the editor: [x, y] or [x, y, width, view height]
-  src: [30, 30]
-  bdf: [300, 30]
-  view: [300, 160, 640, 360]
+  Downsample: [111, -3]
+  BDF: [563, 31]
+  DataVisualizer: [562, 165, 619, 526]
+  Source: [-217, -7]
+  spectrum: [180, 251, 366, 297]
