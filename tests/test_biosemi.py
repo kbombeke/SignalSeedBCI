@@ -70,6 +70,21 @@ def test_parser_resyncs_after_corruption():
     assert np.all(b[:, 0] == SYNC)
 
 
+def test_parser_with_sync_valued_data():
+    # unconnected inputs read -1 LSB = 0xFFFFFF00, the same word as the sync marker
+    dev = FakeActiveTwo(speedmode=4, mk2=True, ring_bytes=10_000_000, realtime=False, seed=3)
+    dev.start()
+    reader = RingReader(dev)
+    dev.advance(300)
+    frames = np.frombuffer(reader.read(), dtype="<u4").reshape(300, -1).copy()
+    frames[:, 40:] = SYNC
+    parser = FrameParser()
+    out = parser.feed(frames.tobytes()[12:])  # start mid-frame
+    assert parser.words_per_sample == frames.shape[1]
+    assert out.shape[0] >= 298
+    assert np.all(out[:, 0] == SYNC) and np.all(out[:, 1] != SYNC)
+
+
 def test_values_roundtrip_within_quantisation():
     from signalseedbci.sources.synthetic import SyntheticEEG
 

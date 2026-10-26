@@ -155,13 +155,25 @@ class FrameParser:
         return None
 
     def _find_alignment(self, words: np.ndarray) -> tuple[int, int] | None:
-        """(first sync index, stride), confirmed by three equally spaced sync words."""
-        syncs = np.flatnonzero(words == SYNC)
+        """(first frame index, stride), confirmed by three equally spaced frame starts.
+
+        A frame start is a sync word followed by a non-sync status word: data channels can
+        hold the sync value too (e.g. unconnected inputs reading -1 LSB), the status cannot.
+        """
+        syncs = np.flatnonzero(words[:-1] == SYNC)
+        syncs = syncs[words[syncs + 1] != SYNC]
         is_sync = set(syncs.tolist())
         if self.words_per_sample is not None:
             candidates = [self.words_per_sample]
-        else:  # frame length unknown: try spacings between consecutive sync words
-            candidates = sorted({int(d) for d in np.diff(syncs[:64]) if d > 2})
+        else:  # frame length unknown: from the status word's speed mode, else sync spacing
+            candidates = []
+            for s0 in syncs[:64]:
+                st = decode_status(words[s0 + 1])
+                if st["speedmode"] <= 8:
+                    stride = frame_channels(st["mk2"], st["speedmode"]) + 2
+                    if stride not in candidates:
+                        candidates.append(stride)
+            candidates += sorted({int(d) for d in np.diff(syncs[:64]) if d > 2} - set(candidates))
         for s0 in syncs:
             for stride in candidates:
                 if s0 + stride in is_sync and s0 + 2 * stride in is_sync:
