@@ -25,17 +25,18 @@
   <img class="logo" src="img/logo.png" alt="SignalSeedBCI" title="SignalSeedBCI"><div class="brand" id="title">scope</div>
   <label>Stream <select id="stream"></select></label>
   <label>Display <select id="filter">
-    <option value="bandpass">1–40 Hz + notch</option><option value="highpass">high-pass 0.5 Hz</option><option value="none">raw</option>
+    <option value="bandpass">1–40 Hz + notch</option><option value="highpass">high-pass 0.5 Hz</option><option value="none">raw</option><option value="emg">EMG (raw, peaks kept)</option>
   </select></label>
-  <label>Plot <select id="mode"><option value="auto">auto</option><option value="stack">stacked</option><option value="overlay">overlaid</option></select></label>
-  <label>Scale <select id="scale"><option>auto</option><option>10</option><option>25</option><option selected>50</option><option>100</option><option>250</option><option>1000</option></select> µV</label>
+  <label>Plot <select id="mode"><option value="auto">auto</option><option value="stack">stacked</option><option value="overlay">overlaid</option><option value="sweep">sweep (ActiView)</option></select></label>
+  <label>Sens <select id="scale"><option value="auto">auto</option><option value="1">±1 µV</option><option value="2">±2 µV</option><option value="5">±5 µV</option><option value="10">±10 µV</option><option value="20">±20 µV</option><option value="50" selected>±50 µV</option><option value="100">±100 µV</option><option value="200">±200 µV</option><option value="500">±500 µV</option><option value="1000">±1 mV</option><option value="2000">±2 mV</option><option value="5000">±5 mV</option><option value="10000">±10 mV</option><option value="20000">±20 mV</option><option value="50000">±50 mV</option><option value="100000">±100 mV</option><option value="200000">±200 mV</option><option value="500000">±500 mV</option></select></label>
+  <button id="sensDown" title="Less sensitive (bigger range)">−</button><button id="sensUp" title="More sensitive (smaller range)">+</button>
   <span id="specCtl" class="group" hidden>
     <label>View <select id="specView"><option value="spectrum">spectrum</option><option value="spectrogram">spectrogram</option></select></label>
     <label>Channel <select id="specChan"><option value="all">all + mean</option><option value="mean">mean</option></select></label>
     <label>Average <select id="specAvg"><option value="1">1 frame</option><option value="4" selected>4 frames</option><option value="8">8 frames</option><option value="16">16 frames</option></select></label>
     <label>Y <select id="specDb"><option value="db">dB</option><option value="lin">linear</option></select></label>
   </span>
-  <label>Window <select id="win"><option>5</option><option>10</option><option selected>30</option><option>60</option></select> s</label>
+  <label>Time <select id="win"><option>1</option><option>2</option><option>4</option><option>5</option><option>8</option><option>10</option><option>20</option><option selected>30</option><option>60</option></select> s</label>
   <label>Channels <select id="page"></select></label>
   <button id="pause">Pause</button>
   <div class="spacer"></div>
@@ -161,7 +162,7 @@ async function tickEvents() {
 function frame() {
   const view = paused && frozen ? frozen : buf;
   drawStream($("#cv"), view, {
-    window: Number($("#win").value), mode: $("#mode").value, scale: $("#scale").value === "auto" ? "auto" : Number($("#scale").value),
+    window: Number($("#win").value), mode: $("#mode").value, sweep: $("#mode").value === "sweep", scale: $("#scale").value === "auto" ? "auto" : Number($("#scale").value), unit: "auto",
     page: Number($("#page").value || 0), perPage: 16, events: paused && frozen ? frozen.events : events.events,
     view: $("#specView").value, channel: $("#specChan").value, avg: Number($("#specAvg").value), db: $("#specDb").value === "db",
   });
@@ -177,7 +178,21 @@ $("#pause").onclick = () => {
     times: buf.times.slice(), data: buf.data.slice(), events: events.events.slice() }) : null;
 };
 
-if (["bandpass", "highpass", "none"].includes(params.get("filter"))) $("#filter").value = params.get("filter");
+if (["bandpass", "highpass", "none", "emg"].includes(params.get("filter"))) $("#filter").value = params.get("filter");
+if (params.get("mode") === "sweep") $("#mode").value = "sweep";
+if (params.get("scale") && [...$("#scale").options].some((o) => o.value === params.get("scale"))) $("#scale").value = params.get("scale");
+const stepSens = (d) => {  // like ActiView's +/- buttons
+  const opts = [...$("#scale").options].filter((o) => o.value !== "auto");
+  const i = opts.findIndex((o) => o.value === $("#scale").value);
+  $("#scale").value = opts[Math.max(0, Math.min(opts.length - 1, i < 0 ? 5 : i + d))].value;
+};
+$("#sensDown").onclick = () => stepSens(1);
+$("#sensUp").onclick = () => stepSens(-1);
+if (params.get("win")) {  // the node's time base, added to the menu if it is not one of the presets
+  const v = String(Number(params.get("win")));
+  if (![...$("#win").options].some((o) => o.value === v)) $("#win").add(new Option(v, v));
+  $("#win").value = v;
+}
 const initial = params.get("stream");
 if (initial) setStream(initial); else listStreams();
 tick(); tickEvents(); requestAnimationFrame(frame);

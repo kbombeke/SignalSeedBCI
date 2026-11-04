@@ -385,3 +385,56 @@ def test_rename_channels_mapping_checks(capsys):
     assert "not in the stream, ignored: Nope" in capsys.readouterr().out
     with pytest.raises(ValueError, match="more than once"):
         RenameChannels("names", {"mapping": {"C0": "C1"}}).setup({"in": INFO})
+
+
+def test_bipolar_pairs_and_names():
+    from signalseedbci.pipeline.nodes.preprocessing import Bipolar
+
+    info = SignalInfo(["Fp1", "AF3", "F7", "F3", "T7"], 2048.0)
+    data = np.arange(5 * 10, dtype=float).reshape(5, 10) ** 2
+    b = Bipolar("b", {"pairs": {"flexor": ["Fp1", "AF3"], "ext": "F7-F3"}})
+    out = b.setup({"in": info})["out"]
+    assert out.ch_names == ["flexor", "ext"] and out.ch_types == ["emg", "emg"]
+    y = b.process({"in": [SignalChunk(data, np.arange(10) / 2048)]})["out"][0].data
+    np.testing.assert_allclose(y, [data[0] - data[1], data[2] - data[3]])
+
+    k = Bipolar("k", {"pairs": ["Fp1-AF3"], "keep_others": True})
+    assert k.setup({"in": info})["out"].ch_names == ["Fp1-AF3", "F7", "F3", "T7"]
+    with pytest.raises(ValueError, match="not in stream"):
+        Bipolar("x", {"pairs": {"a": ["Fp1", "C3"]}}).setup({"in": info})
+
+
+def test_bandpass_clamps_low_pass_below_nyquist():
+    f = BandpassFilter("f", {"l_freq": 10, "h_freq": 500})
+    f.setup({"in": SignalInfo(["a"], 512.0)})  # 500 Hz > Nyquist: lowered instead of failing
+    y = f.process({"in": [SignalChunk(np.random.default_rng(0).standard_normal((1, 2000)), np.arange(2000) / 512)]})
+    assert np.isfinite(y["out"][0].data).all()
+
+
+def test_display_envelope_keeps_peaks():
+    from signalseedbci.gui.server import StreamWatcher
+
+    w = object.__new__(StreamWatcher)  # only the decimation, no LSL inlet
+    w.k, w.envelope, w.sos = 8, True, None
+    w._carry_t, w._carry_x = np.zeros(0), np.zeros((0, 1))
+    x = np.zeros((16, 1))
+    x[3, 0], x[12, 0] = 100.0, -80.0  # single-sample spikes, lost by block averaging
+    out = w._decimate(x, np.arange(16) / 2048)
+    vals = [v[0] for _, v in out]
+    assert len(out) == 4 and max(vals) == 100.0 and min(vals) == -80.0
+
+
+def test_watcher_get_returns_only_newer_samples():
+    import threading
+
+    from signalseedbci.gui.server import StreamWatcher
+
+    w = object.__new__(StreamWatcher)
+    w._lock, w.is_string, w.ch_names, w.sfreq, w.k, w.envelope, w.error = threading.Lock(), False, ["a"], 100.0, 1, False, None
+    w.name = "s"
+    w.pylsl = type("P", (), {"local_clock": staticmethod(lambda: 10.0)})
+    w.times = [i * 0.01 for i in range(1000)]
+    w.values = [[float(i)] for i in range(1000)]
+    out = w.get(since=9.5, window=60)
+    assert out["times"][0] > 9.5 and len(out["times"]) == 49 and out["data"][-1] == [999.0]
+    assert len(w.get(since=0, window=1.0)["times"]) == 100  # at most the last `window` seconds

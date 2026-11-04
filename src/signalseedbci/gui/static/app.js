@@ -105,7 +105,10 @@ function openNodeView(n) {
   if (NODE_VIEWS[n.type] === "runner") return openRunnerWindow(miniStreamName(n), runnerParams(n));
   if (NODE_VIEWS[n.type] === "eyes") openEyesWindow(miniStreamName(n), paramOf(n, "closed_label"), !!paramOf(n, "graded"));
   else if (NODE_VIEWS[n.type] === "gaze") openEyesWindow(miniStreamName(n), "closed", !!paramOf(n, "graded"), gazeParams(n));
-  else openScopeWindow(miniStreamName(n), n.type === "DataVisualizer" ? paramOf(n, "display") : null);
+  else if (n.type !== "DataVisualizer") openScopeWindow(miniStreamName(n), null);
+  else openScopeWindow(miniStreamName(n), paramOf(n, "display"),
+                       { mode: paramOf(n, "sweep") ? "sweep" : null, win: paramOf(n, "window_s"),
+                         scale: Number(paramOf(n, "scale")) > 0 ? Number(paramOf(n, "scale")) * ({ mV: 1e3, V: 1e6 }[paramOf(n, "unit")] || 1) : "auto" });
 }
 // nodes can be resized: n.w (width) for all nodes, n.vh (height of the live view) for view nodes
 const VIEW_H = 86, VIEW_PAD = 32, MIN_W = NODE_W, MAX_W = 1600, MIN_VH = 60, MAX_VH = 1200;
@@ -131,11 +134,61 @@ function uniqueId(base) {
 }
 const DEFAULT_IDS = {
   LSLSource: "src", FileSource: "src", LSLMarkerSource: "markers", BandpassFilter: "band", NotchFilter: "notch",
-  Rereference: "ref", PickChannels: "pick", RenameChannels: "names", Decimate: "down", Epocher: "epochs",
+  Rereference: "ref", Bipolar: "bipolar", PickChannels: "pick", RenameChannels: "names", Decimate: "down", Epocher: "epochs",
   SlidingWindow: "windows", BandPower: "power", Classifier: "clf", PredictionOut: "feedback", Logger: "log", SpectrumOut: "spectrum",
   ThresholdClassifier: "state", BlinkDetector: "blink", EyesFeedback: "eyes", GazeFeedback: "gaze", RunnerGame: "game", TimeWindowMeans: "means",
   DataVisualizer: "viz", Recorder: "rec", BDFRecorder: "bdf", SignalScript: "script", EpochScript: "script",
 };
+
+// ActiView-style display controls on a Data Visualizer's live view: sensitivity (± per
+// channel, with its unit) and time base. They edit the node's scale / unit / window_s.
+const SENSITIVITIES_UV = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1e3, 2e3, 5e3, 1e4, 2e4, 5e4, 1e5, 2e5, 5e5];
+const TIMEBASES_S = [1, 2, 4, 5, 8, 10, 20, 30];
+function scopeControls(n) {
+  const unitF = { mV: 1e3, V: 1e6 };
+  const curUv = () => { const s = Number(paramOf(n, "scale")); return s > 0 ? s * (unitF[paramOf(n, "unit")] || 1) : 0; };
+  const setParams = (vals) => {
+    for (const [k, v] of Object.entries(vals)) {
+      const def = schemaOf(n.type).params[k]?.default;
+      if (v === undefined || JSON.stringify(v) === JSON.stringify(def)) delete n.params[k]; else n.params[k] = v;
+    }
+    const summary = $(`.node[data-id="${CSS.escape(n.id)}"] .node-summary`);
+    if (summary) summary.textContent = paramSummary(n);
+    if (S.selected?.kind === "node" && S.selected.id === n.id) renderInspector();
+    markDirty();
+  };
+  const sens = el("select", { title: "Sensitivity: ± range of each channel row (auto: fit, changes only between sweeps)" },
+    el("option", { value: "0" }, "auto"),
+    ...SENSITIVITIES_UV.map((uv) => el("option", { value: String(uv) }, "±" + fmtVolt(uv))));
+  const cur = curUv();
+  if (cur && !SENSITIVITIES_UV.includes(cur)) sens.add(new Option("±" + fmtVolt(cur), String(cur)));
+  sens.value = String(cur);
+  sens.onchange = () => {
+    const uv = Number(sens.value);
+    if (!uv) return setParams({ scale: undefined, unit: undefined });
+    const unit = uv >= 1e6 ? "V" : uv >= 1e3 ? "mV" : "uV";
+    setParams({ scale: uv / (unitF[unit] || 1), unit });
+  };
+  const time = el("select", { title: "Time base: seconds across the view" },
+    ...TIMEBASES_S.map((s) => el("option", { value: String(s) }, `${s} s`)));
+  const win = Number(paramOf(n, "window_s")) || 30;
+  if (!TIMEBASES_S.includes(win)) time.add(new Option(`${win} s`, String(win)));
+  time.value = String(win);
+  time.onchange = () => setParams({ window_s: Number(time.value) });
+  const step = (d) => {  // ▲/▼ buttons: next sensitivity, like ActiView's +/- buttons
+    const i = SENSITIVITIES_UV.indexOf(Number(sens.value));
+    const j = i < 0 ? SENSITIVITIES_UV.findIndex((v) => v >= (curUv() || 50)) : i + d;
+    sens.value = String(SENSITIVITIES_UV[Math.max(0, Math.min(SENSITIVITIES_UV.length - 1, j))]);
+    sens.onchange();
+  };
+  const bar = el("div", { class: "scope-ctrl" },
+    el("label", {}, "Sens ", sens),
+    el("button", { class: "mini-btn", title: "Less sensitive (bigger range)", onclick: () => step(1) }, "−"),
+    el("button", { class: "mini-btn", title: "More sensitive (smaller range)", onclick: () => step(-1) }, "+"),
+    el("label", {}, "Time ", time));
+  for (const ev of ["mousedown", "dblclick", "wheel"]) bar.addEventListener(ev, (e) => e.stopPropagation());
+  return bar;
+}
 
 function paramSummary(node) {
   const sc = schemaOf(node.type);
@@ -334,6 +387,7 @@ function renderNodes() {
     div.append(ports, el("div", { class: "node-summary" }, paramSummary(n)));
     if (SCOPE_NODES.has(n.type)) {
       const plot = el("div", { class: "node-scope", title: "Live view of the stream this node publishes — double-click to open in a window" },
+        ...(n.type === "DataVisualizer" ? [scopeControls(n)] : []),
         el("canvas", { class: "mini", style: `height:${viewH(n)}px` }), el("div", { class: "mini-status" }, ""));
       div.append(plot);
     }
@@ -1538,7 +1592,13 @@ function drawMiniScopes() {
     }
     // enlarged nodes get the full plot (axes, labels, legend); small ones the thumbnail
     const big = cv.clientWidth >= 300 && cv.clientHeight >= 150;
-    drawStream(cv, m?.buf, { window: 30, compact: !big, events: m?.events.events, perPage: 16 });
+    const viz = n.type === "DataVisualizer";
+    const win = viz ? Number(paramOf(n, "window_s")) || 30 : 30;
+    const unit = viz ? paramOf(n, "unit") || "auto" : undefined;
+    const fixed = viz ? Number(paramOf(n, "scale")) : 0;  // ± per channel in `unit` (µV for auto)
+    const scale = fixed > 0 ? fixed * ({ mV: 1e3, V: 1e6 }[unit] || 1) : "auto";
+    const sweep = viz && !!paramOf(n, "sweep");
+    drawStream(cv, m?.buf, { window: win, compact: !big, events: m?.events.events, perPage: 16, scale, unit, sweep });
     if (m && !m.buf.missing && m.buf.times.length) {
       const last = m.buf.data[m.buf.data.length - 1];
       const live = m.buf.staleness < 3;

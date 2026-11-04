@@ -112,7 +112,9 @@ function eventLabel(v) {
 /**
  * Draw a stream into a canvas.
  * opts: window (s), mode ("auto" | "stack" | "overlay"), scale (µV per half row, or "auto"),
- *       page / perPage (stack mode channel paging), compact (small node plot), events.
+ *       page / perPage (stack mode channel paging), compact (small node plot), events,
+ *       unit (voltage labels), sweep (ActiView-style: a cursor sweeps left to right and
+ *       overwrites the oldest data; auto scales change only when a sweep starts).
  */
 function drawStream(canvas, buf, opts = {}) {
   const css = getComputedStyle(document.documentElement);
@@ -142,18 +144,32 @@ function drawStream(canvas, buf, opts = {}) {
 
   const win = opts.window || 30;
   const tEnd = buf.times[buf.times.length - 1], tStart = tEnd - win;
-  const overlay = opts.mode === "overlay" || (opts.mode !== "stack" && (buf.sfreq === 0 || buf.sfreq < 20));
+  const sweep = !!opts.sweep;
+  const overlay = !sweep && (opts.mode === "overlay" || (opts.mode !== "stack" && (buf.sfreq === 0 || buf.sfreq < 20)));
   const left = compact ? 4 : overlay ? 52 : 64, right = compact ? 4 : 10, top = compact ? 4 : 8;
   const bottom = compact ? 4 : 18;
   const plotH = h - top - bottom;
-  const xOf = (t) => left + ((t - tStart) / win) * (w - left - right);
+  const pStart = Math.floor(tEnd / win) * win;  // sweep: start time of the current sweep
+  const xOf = sweep ? (t) => left + ((((t - pStart) % win) + win) % win) / win * (w - left - right)
+                    : (t) => left + ((t - tStart) / win) * (w - left - right);
   let i0 = 0;
   while (i0 < buf.times.length && buf.times[i0] < tStart) i0++;
 
   // time grid
   ctx.strokeStyle = border; ctx.lineWidth = 1;
   const stepS = win <= 10 ? 1 : win <= 30 ? 5 : 10;
-  for (let rel = 0; rel >= -win; rel -= stepS) {  // ticks counted back from the newest sample
+  if (sweep) {  // fixed ticks: seconds into the sweep, and the sweep cursor
+    for (let k = 0; k * stepS <= win; k++) {
+      const x = left + (k * stepS / win) * (w - left - right);
+      ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, h - bottom); ctx.stroke();
+      if (!compact) { ctx.fillStyle = muted; ctx.fillText(`${k * stepS} s`, x - 8, h - 4); }
+    }
+    const xc = xOf(tEnd);
+    ctx.strokeStyle = color("--accent", "#3b7ddd"); ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(xc, top); ctx.lineTo(xc, h - bottom); ctx.stroke();
+    ctx.strokeStyle = border; ctx.lineWidth = 1;
+  }
+  for (let rel = 0; !sweep && rel >= -win; rel -= stepS) {  // ticks counted back from the newest sample
     const x = xOf(tEnd + rel);
     ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, h - bottom); ctx.stroke();
     if (!compact) {
@@ -196,10 +212,7 @@ function drawStream(canvas, buf, opts = {}) {
       ctx.strokeStyle = SCOPE_COLORS[k % SCOPE_COLORS.length];
       ctx.lineWidth = compact ? 1.2 : 1.6;
       ctx.beginPath();
-      for (let i = i0; i < n; i += step) {
-        const x = xOf(buf.times[i]), y = yOf(buf.data[i][c]);
-        if (i === i0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      }
+      tracePath(ctx, buf, c, i0, n, step, xOf, yOf);
       ctx.stroke();
     });
     if (!compact) {  // legend
@@ -222,24 +235,86 @@ function drawStream(canvas, buf, opts = {}) {
   const chans = buf.ch.map((_, c) => c).slice(page * perPage, page * perPage + perPage);
   const rowH = plotH / Math.max(1, chans.length);
   const trace = color("--k-signal", "#3b7ddd");
+  // sweep: the current sweep [iP, n) left of the cursor, the rest of the previous one right of
+  // it after a small gap; auto scales are kept for a whole sweep
+  let iP = i0;
+  while (iP < n && buf.times[iP] < pStart) iP++;
+  let iOld = i0;
+  while (iOld < iP && buf.times[iOld] < tStart + 0.03 * win) iOld++;
+  if (sweep && buf.sweepHold?.page !== pStart) buf.sweepHold = { page: pStart, half: new Map() };
   chans.forEach((c, k) => {
     const y0 = top + rowH * (k + 0.5);
     let mean = 0, sq = 0, cnt = 0;
     for (let i = i0; i < n; i++) { const v = buf.data[i][c]; mean += v; sq += v * v; cnt++; }
     mean /= Math.max(1, cnt);
     const sd = Math.sqrt(Math.max(0, sq / Math.max(1, cnt) - mean * mean));
-    const half = opts.scale === "auto" || compact ? Math.max(1e-6, 3 * sd) : Number(opts.scale || 50);
+    const fixed = Number(opts.scale);
+    let half = opts.scale !== "auto" && fixed > 0 && !(compact && opts.scale === undefined)
+      ? fixed : niceCeil(Math.max(1e-3, 3 * sd));
+    if (sweep && !(fixed > 0)) {
+      const key = `${c}:${compact ? "s" : "b"}`;
+      if (!buf.sweepHold.half.has(key)) buf.sweepHold.half.set(key, half);
+      half = buf.sweepHold.half.get(key);
+    }
     const kY = (rowH / 2) / half;
     if (!compact) { ctx.fillStyle = text; ctx.fillText(buf.ch[c].slice(0, 9), 6, y0 + 4); }
-    ctx.strokeStyle = trace; ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let i = i0; i < n; i += step) {
-      const x = xOf(buf.times[i]);
-      const y = Math.max(y0 - rowH / 2, Math.min(y0 + rowH / 2, y0 - (buf.data[i][c] - mean) * kY));
-      if (i === i0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    if (opts.unit && rowH >= (compact ? 12 : 16)) {  // voltage labels: ± range of this row
+      ctx.fillStyle = muted;
+      const lbl = "±" + fmtVolt(half, opts.unit);
+      if (compact) ctx.fillText(`${buf.ch[c].slice(0, 9)} ${lbl}`, left + 2, y0 - rowH / 2 + 10);
+      else {
+        ctx.fillText(lbl, 6, y0 + 16);
+        ctx.strokeStyle = border; ctx.setLineDash([2, 3]);
+        for (const yy of [y0 - rowH / 2 + 0.5, y0 + rowH / 2 - 0.5]) { ctx.beginPath(); ctx.moveTo(left, yy); ctx.lineTo(w - right, yy); ctx.stroke(); }
+        ctx.setLineDash([]);
+      }
     }
+    ctx.strokeStyle = trace; ctx.lineWidth = 1;
+    const yOf = (v) => Math.max(y0 - rowH / 2, Math.min(y0 + rowH / 2, y0 - (v - mean) * kY));
+    ctx.beginPath();
+    if (sweep) {
+      if (iOld < iP) tracePath(ctx, buf, c, iOld, iP, step, xOf, yOf);
+      ctx.stroke(); ctx.beginPath();
+      tracePath(ctx, buf, c, iP, n, step, xOf, yOf);
+    } else tracePath(ctx, buf, c, i0, n, step, xOf, yOf);
     ctx.stroke();
   });
+}
+
+/** One channel as a path; with more samples than pixels, each group of `step` samples is drawn
+ * as its minimum and maximum (in time order), so spikes and EMG bursts stay visible. */
+function tracePath(ctx, buf, c, i0, n, step, xOf, yOf) {
+  let first = true;
+  const to = (i) => {
+    const x = xOf(buf.times[i]), y = yOf(buf.data[i][c]);
+    if (first) { ctx.moveTo(x, y); first = false; } else ctx.lineTo(x, y);
+  };
+  for (let i = i0; i < n; i += step) {
+    if (step === 1) { to(i); continue; }
+    let ilo = i, ihi = i;
+    for (let j = i + 1; j < Math.min(n, i + step); j++) {
+      const v = buf.data[j][c];
+      if (v < buf.data[ilo][c]) ilo = j;
+      if (v > buf.data[ihi][c]) ihi = j;
+    }
+    if (ilo <= ihi) { to(ilo); if (ihi !== ilo) to(ihi); } else { to(ihi); to(ilo); }
+  }
+}
+
+/** Smallest 1-2-5 step value >= v, so auto scales change in readable steps. */
+function niceCeil(v) {
+  const e = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const m of [1, 2, 5, 10]) if (m * e >= v * 0.999) return m * e;
+  return 10 * e;
+}
+
+/** A voltage given in µV, shown in `unit` ("uV" | "mV" | "V", or "auto" by magnitude). */
+function fmtVolt(uv, unit = "auto") {
+  if (unit === "auto") unit = Math.abs(uv) >= 1e6 ? "V" : Math.abs(uv) >= 1e3 ? "mV" : "uV";
+  const f = { uV: 1, mV: 1e3, V: 1e6 }[unit] || 1;
+  const v = uv / f, a = Math.abs(v);
+  const txt = a >= 100 || a === Math.round(a) ? v.toFixed(0) : a >= 10 ? v.toFixed(1) : v.toPrecision(2);
+  return `${txt} ${unit === "uV" ? "µV" : unit}`;
 }
 
 function fmtNum(v) {
@@ -248,8 +323,9 @@ function fmtNum(v) {
   return v.toFixed(a >= 100 ? 0 : a >= 10 ? 1 : 2);
 }
 
-function openScopeWindow(stream, filter = null) {
-  const url = `/scope.html?stream=${encodeURIComponent(stream)}` + (filter ? `&filter=${filter}` : "");
+function openScopeWindow(stream, filter = null, extra = {}) {
+  let url = `/scope.html?stream=${encodeURIComponent(stream)}` + (filter ? `&filter=${filter}` : "");
+  for (const [k, v] of Object.entries(extra)) if (v != null) url += `&${k}=${encodeURIComponent(v)}`;
   window.open(url, `signalseedbci-scope-${stream}`, "width=1100,height=640");
 }
 

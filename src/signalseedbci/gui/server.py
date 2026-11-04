@@ -13,6 +13,7 @@ localhost, because the API can start processes and write files.
 
 from __future__ import annotations
 
+import bisect
 import json
 import mimetypes
 import os
@@ -140,7 +141,8 @@ class ProcessManager:
 class StreamWatcher:
     """Background inlet keeping the last seconds of a stream for the GUI scope.
 
-    Numeric streams are block-averaged to about ``display_rate`` Hz."""
+    Numeric streams are block-averaged to about ``display_rate`` Hz; with ``filt="emg"``
+    each block becomes its minimum and maximum instead, so fast signals keep their peaks."""
 
     def __init__(self, info, keep_s: float = 65.0, display_rate: float = 250.0, filt: str = "none"):
         import pylsl
@@ -160,9 +162,10 @@ class StreamWatcher:
         self.sfreq = info.nominal_srate()
         self.k = max(1, int(round(self.sfreq / display_rate))) if self.sfreq > 0 else 1
         self.keep_s = keep_s
+        self.envelope = filt == "emg"
         self.sos, self.zi = self._display_filter(filt), None
-        self.times: deque[float] = deque()
-        self.values: deque = deque()
+        self.times: list[float] = []  # sorted (monotonized inlet): searched with bisect
+        self.values: list = []
         self._carry_t = np.zeros(0)
         self._carry_x = np.zeros((0, len(self.ch_names)))
         self.last_access = self.last_data = self.last_check = time.monotonic()
@@ -186,10 +189,9 @@ class StreamWatcher:
                         for t, v in new:
                             self.times.append(t)
                             self.values.append(v)
-                        cutoff = self.times[-1] - self.keep_s
-                        while self.times and self.times[0] < cutoff:
-                            self.times.popleft()
-                            self.values.popleft()
+                        drop = bisect.bisect_left(self.times, self.times[-1] - self.keep_s)
+                        if drop > 1024 or drop > len(self.times) // 4:  # trim in batches, not per sample
+                            del self.times[:drop], self.values[:drop]
                 if time.monotonic() - self.last_access > 30:
                     break
         except Exception as exc:  # stream vanished, etc.
@@ -206,7 +208,7 @@ class StreamWatcher:
         from scipy import signal as sps
 
         fs = self.sfreq
-        if self.is_string or fs <= 0 or filt == "none":
+        if self.is_string or fs <= 0 or filt in ("none", "emg"):
             return None
         if filt == "highpass" or fs < 100:
             return sps.butter(2, 0.5, "highpass", fs=fs, output="sos")
@@ -236,8 +238,15 @@ class StreamWatcher:
         self._carry_x, self._carry_t = x[n:], t[n:]
         if n == 0:
             return []
-        xb = x[:n].reshape(-1, self.k, x.shape[1]).mean(axis=1)
+        blocks = x[:n].reshape(-1, self.k, x.shape[1])
         tb = t[self.k - 1:n:self.k]
+        if self.envelope:  # min then max of each block, at the block's first and last time
+            ta = t[0:n:self.k]
+            out = []
+            for a, b, lo, hi in zip(ta, tb, blocks.min(axis=1), blocks.max(axis=1)):
+                out += [(float(a), lo.tolist()), (float(b), hi.tolist())]
+            return out
+        xb = blocks.mean(axis=1)
         return [(float(ti), xi.tolist()) for ti, xi in zip(tb, xb)]
 
     @property
@@ -250,17 +259,15 @@ class StreamWatcher:
         with self._lock:
             if self.times:
                 since = max(since, self.times[-1] - window)
-            idx = [i for i in range(len(self.times) - 1, -1, -1) if self.times[i] > since]
-            idx.reverse()
-            times = [self.times[i] for i in idx]
-            values = [self.values[i] for i in idx]
+            i = bisect.bisect_right(self.times, since)
+            times, values = self.times[i:], self.values[i:]
         out = {"name": self.name, "kind": "markers" if self.is_string else "numeric", "times": times,
                "now": self.pylsl.local_clock(), "error": self.error}
         if self.is_string:
             out["values"] = values
         else:
             out["ch_names"] = self.ch_names
-            out["sfreq"] = self.sfreq / self.k if self.sfreq > 0 else 0
+            out["sfreq"] = self.sfreq / self.k * (2 if self.envelope else 1) if self.sfreq > 0 else 0
             out["data"] = values
         return out
 
@@ -614,7 +621,7 @@ class App:
 
     def api_watch(self, q, b):
         filt = q.get("filter", "none")
-        if filt not in ("none", "highpass", "bandpass"):
+        if filt not in ("none", "highpass", "bandpass", "emg"):
             raise ValueError(f"unknown display filter {filt!r}")
         return self.monitor.watch(q["name"], float(q.get("since", 0)), filt, float(q.get("window", 60)))
 

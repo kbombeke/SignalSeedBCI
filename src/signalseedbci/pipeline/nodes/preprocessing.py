@@ -147,6 +147,68 @@ class Rereference(_SignalNode):
         return SignalChunk(out[self.keep], times)
 
 
+def _parse_pairs(pairs) -> dict[str, tuple[str, str]]:
+    """{label: [plus, minus]} or {label: "plus-minus"} or ["plus-minus", ...] -> {label: (plus, minus)}."""
+    def split(v):
+        if isinstance(v, (list, tuple)) and len(v) == 2:
+            return str(v[0]).strip(), str(v[1]).strip()
+        if isinstance(v, str) and v.count("-") == 1:
+            a, b = v.split("-")
+            return a.strip(), b.strip()
+        raise ValueError(f"bipolar pair {v!r}: use [plus, minus] or 'plus-minus'")
+
+    if isinstance(pairs, dict):
+        return {str(k): split(v) for k, v in pairs.items()}
+    if isinstance(pairs, str):
+        pairs = [pairs]
+    out = {}
+    for v in pairs or []:
+        plus, minus = split(v)
+        out[f"{plus}-{minus}"] = (plus, minus)
+    return out
+
+
+class Bipolar(_SignalNode):
+    """Bipolar derivations: each output channel is EMG+ minus EMG- (e.g. sEMG over a muscle).
+
+    ``pairs`` maps an output name to [plus, minus], e.g. {flexor: [Fp1, AF3], extensor:
+    [F7, F3]}, or is a list like [Fp1-AF3, F7-F3] (output named 'Fp1-AF3'). The output
+    holds only the bipolar channels, unless ``keep_others`` is set."""
+
+    params = {
+        "pairs": Param(None, "dict", "{name: [plus, minus]} or list of 'plus-minus'", required=True),
+        "ch_type": Param("emg", "choice", "Channel type of the bipolar channels", choices=["emg", "eog", "ecg", "eeg", "misc"]),
+        "keep_others": Param(False, "bool", "Also pass on channels not used in any pair"),
+    }
+
+    def setup(self, in_meta):
+        info = in_meta["in"]
+        pairs = _parse_pairs(self.p.pairs)
+        if not pairs:
+            raise ValueError(f"{self.id}: no bipolar pairs given")
+        missing = sorted({c for pm in pairs.values() for c in pm if c not in info.ch_names})
+        if missing:
+            raise ValueError(f"{self.id}: channel(s) {missing} not in stream (available: {info.ch_names[:12]}...)")
+        self.plus = [info.ch_names.index(p) for p, _ in pairs.values()]
+        self.minus = [info.ch_names.index(m) for _, m in pairs.values()]
+        names, types = list(pairs), [self.p.ch_type] * len(pairs)
+        self.others = []
+        if self.p.keep_others:
+            used = set(self.plus) | set(self.minus)
+            self.others = [i for i in range(info.n_channels) if i not in used]
+            names += [info.ch_names[i] for i in self.others]
+            types += [info.ch_types[i] for i in self.others]
+        if len(set(names)) != len(names):
+            raise ValueError(f"{self.id}: duplicate output channel names {names}")
+        return {"out": info.copy(ch_names=names, ch_types=types)}
+
+    def transform(self, data, times):
+        out = data[self.plus] - data[self.minus]
+        if self.others:
+            out = np.concatenate([out, data[self.others]])
+        return SignalChunk(out, times)
+
+
 class BandpassFilter(_SignalNode):
     """Causal Butterworth band-pass / high-pass / low-pass (MNE design, SOS)."""
 
@@ -158,7 +220,12 @@ class BandpassFilter(_SignalNode):
 
     def setup(self, in_meta):
         info = in_meta["in"]
-        self.filt = _StreamingSOS(_iir_sos(info.sfreq, self.p.l_freq, self.p.h_freq, self.p.order), info.n_channels)
+        h_freq = self.p.h_freq
+        if h_freq is not None and h_freq >= 0.45 * info.sfreq:
+            # e.g. a 500 Hz EMG low-pass on 512 Hz test data: keep the pipeline usable
+            h_freq = 0.45 * info.sfreq
+            self.log(f"h_freq {self.p.h_freq:g} Hz is too close to Nyquist at {info.sfreq:g} Hz; using {h_freq:g} Hz")
+        self.filt = _StreamingSOS(_iir_sos(info.sfreq, self.p.l_freq, h_freq, self.p.order), info.n_channels)
         return {"out": info}
 
     def transform(self, data, times):

@@ -27,8 +27,16 @@ class DataVisualizer(Node):
         "name": Param("signalseedbci-out", "str", "LSL stream name"),
         "type": Param("EEG", "str", "LSL stream type"),
         "display": Param("bandpass", "choice", "Filter for the editor's plots only (published data is unchanged): "
-                         "1-40 Hz + notch, high-pass 0.5 Hz, or none (use for EOG / slow signals)",
-                         choices=["bandpass", "highpass", "none"]),
+                         "1-40 Hz + notch, high-pass 0.5 Hz, none (use for EOG / slow signals), or emg "
+                         "(unfiltered, keeps the peaks of fast signals when reducing them for the screen)",
+                         choices=["bandpass", "highpass", "none", "emg"]),
+        "window_s": Param(30.0, "float", "Seconds shown in the editor's live view (e.g. 5 for EMG)"),
+        "sweep": Param(False, "bool", "ActiView-style live view: a cursor sweeps left to right over a fixed "
+                       "time base and overwrites the oldest data (instead of scrolling)"),
+        "unit": Param("auto", "choice", "Unit of the voltage labels in the editor's view (signals arrive in µV); "
+                      "auto picks µV, mV or V from the scale", choices=["auto", "uV", "mV", "V"]),
+        "scale": Param(None, "float", "Fixed ± range per channel in 'unit' (µV when unit is auto), e.g. 200; "
+                       "empty: fit to the signal"),
     }
 
     def setup(self, in_meta):
