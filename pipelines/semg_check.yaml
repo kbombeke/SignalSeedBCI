@@ -1,0 +1,57 @@
+# Online check of an sEMG set-up: bipolar EMG channels in real time.
+#
+# Electrodes on the arm/hand are recorded on Fp1..C3 (BioSemi A1..A8, named with the
+# biosemi32 preset), with CMS/DRL also on the arm. Set which electrode is EMG+ and which
+# EMG- in the 'bipolar' node:
+#   pairs: {name: [EMG+, EMG-], ...}    e.g. {flexor: [Fp1, AF3]}
+# BioSemi records reference-free (relative to CMS); EMG+ minus EMG- cancels that common
+# part, so no Rereference node is needed.
+#
+# 'band' is the EMG band (10-500 Hz, adjustable: l_freq / h_freq). 500 Hz needs at least
+# ~1.1 kHz sampling (BioSemi 2048 Hz is fine); on slower data the low-pass is lowered to
+# 0.45 x the sampling rate automatically. 'emg' shows the signals (display: emg keeps the
+# peaks when the editor reduces them for the screen, so no downsampling is needed for the
+# plot); 'spectrum' shows mains noise (50 Hz and harmonics) and the EMG power per channel.
+# The 'emg' view sweeps like ActiView (sweep: true): a cursor runs left to right over
+# window_s seconds and overwrites the oldest data. Voltage scale of the 'emg' view: unit (auto/uV/mV/V) and scale (± per channel in that
+# unit, e.g. 200 with uV; null = fit to the signal in 1-2-5 steps).
+# To downsample the data itself, put a Decimate node (target_sfreq: 1024) before 'band'.
+#
+#   editor: Data > Amplifier / bridge (live), then Run
+name: sEMG set-up check (bipolar)
+
+nodes:
+  src:
+    type: LSLSource
+    params: {signal_name: BioSemi, marker_name: BioSemi-Triggers}
+  names:
+    type: RenameChannels
+    params: {preset: biosemi32}
+  bipolar:
+    type: Bipolar
+    params: {pairs: {emg1: [Fp1, AF3], emg2: [F7, F3], emg3: [FC1, FC5], emg4: [T7, C3]}}
+  band:
+    type: BandpassFilter
+    params: {l_freq: 10, h_freq: 100, order: 4}
+  emg:
+    type: DataVisualizer
+    params: {name: signalseedbci-emg, type: EMG, display: emg, window_s: 10, sweep: true, scale: 50, unit: uV}
+  spectrum:
+    type: SpectrumOut
+    params: {name: signalseedbci-emg-spectrum, window_s: 1, step_s: 0.25, resolution_hz: 2, fmin: 5, fmax: 500}
+
+edges:
+  - src.signal -> names.in
+  - names.out -> bipolar.in
+  - bipolar.out -> band.in
+  - src.markers -> emg.markers
+  - band.out -> spectrum.in
+  - band.out -> emg.in
+
+layout:  # node positions in the editor: [x, y] or [x, y, width, view height]
+  src: [30, 30]
+  names: [30, 160]
+  bipolar: [30, 290]
+  band: [30, 420]
+  emg: [530, 30, 700, 440]
+  spectrum: [530, 625, 700, 260]
