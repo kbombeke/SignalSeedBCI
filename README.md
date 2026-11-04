@@ -214,7 +214,7 @@ edges:
 | Epoching | `Epocher` (around markers), `SlidingWindow` (continuous decoding) |
 | Features | `BandPower`, `TimeWindowMeans` |
 | Classification | `Classifier` (`csp_lda`, `ts_lr`, `mdm`, `xdawn_ts_lr`, `lda`, or your own), `ThresholdClassifier` (high/low on one feature, self-calibrating, no training), **Blink Detector** (`BlinkDetector`: a `blink` prediction per eye blink in frontal/EOG channels, adaptive threshold, no training) |
-| Outputs | **Data Visualizer** (`DataVisualizer`: live plot + LSL stream), `SpectrumOut`, `EyesFeedback`, `GazeFeedback`, **Emu Runner** (`RunnerGame`, a game, see [the example](#example-emu-runner)), `PredictionOut` (JSON predictions over LSL), `Recorder` (.fif), `Logger` |
+| Outputs | **Data Visualizer** (`DataVisualizer`: live plot + LSL stream), `SpectrumOut`, `EyesFeedback`, `GazeFeedback`, **Emu Runner** (`RunnerGame`, a game, see [the example](#example-emu-runner)), `PredictionOut` (JSON predictions over LSL), **BDF Recorder** (`BDFRecorder`: a .bdf file as ActiView writes it), `Recorder` (.fif), `Logger` |
 | Scripting | `SignalScript`, `EpochScript` (see [Extending it with Python](#extending-it-with-python)) |
 
 **Examples** in `pipelines/`:
@@ -225,6 +225,7 @@ edges:
 | `alpha_neurofeedback.yaml` | Relative alpha power and a live spectrum as LSL streams |
 | `motor_imagery.yaml` | Left vs right hand imagery with CSP + LDA (train first) |
 | `blink_runner.yaml` | Emu Runner: blink to make the emu jump (Blink Detector on Fp1/Fp2, no training) |
+| `biosemi_recording.yaml` | Record the raw ActiveTwo data to a .bdf file as ActiView does, with a live plot |
 | `Exp2_replay_attempt1.yaml` | In-ear EOG from a recorded session: mastoid reference, 128 Hz, 10 Hz low-pass, live plot |
 
 ## Command line
@@ -304,6 +305,14 @@ SignalSeedBCI includes a **bridge** that publishes the amplifier as the LSL stre
 - `signalseedbci bridge actiview --tcp-channels N --sfreq F`: reads ActiView's TCP server, so
   ActiView keeps the amplifier.
 - `--fake` simulates an ActiveTwo, to test the whole path without hardware.
+
+**Recording as ActiView does**: `pipelines/biosemi_recording.yaml` connects the source straight
+to a **BDF Recorder**, which writes what ActiView writes: every channel unchanged (reference-free,
+full rate, 24 bit at 31.25 nV), the same header and 1-second records, and a `Status` channel last.
+Start the bridge with `--status` so Status holds the amplifier's full status word (triggers in bits
+0–15, CMS/battery/speed mode above), as in an ActiView file; without it Status is rebuilt from the
+trigger markers. Each ▶ Run writes a new `data/recording_<time>.bdf`, readable throughout the
+recording; ■ Stop finishes it (an incomplete last second is not saved, as in ActiView).
 
 The amplifier's driver is Windows-only, so the bridge runs on the Windows computer the
 amplifier is plugged into (`windows\start-bridge.cmd`). The pipeline can run on the same

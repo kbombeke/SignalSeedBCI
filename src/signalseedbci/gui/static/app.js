@@ -137,7 +137,7 @@ const DEFAULT_IDS = {
   Rereference: "ref", Bipolar: "bipolar", PickChannels: "pick", RenameChannels: "names", Decimate: "down", Epocher: "epochs",
   SlidingWindow: "windows", BandPower: "power", Classifier: "clf", PredictionOut: "feedback", Logger: "log", SpectrumOut: "spectrum",
   ThresholdClassifier: "state", BlinkDetector: "blink", EyesFeedback: "eyes", GazeFeedback: "gaze", RunnerGame: "game", TimeWindowMeans: "means",
-  DataVisualizer: "viz", Recorder: "rec", SignalScript: "script", EpochScript: "script",
+  DataVisualizer: "viz", Recorder: "rec", BDFRecorder: "bdf", SignalScript: "script", EpochScript: "script",
 };
 
 // ActiView-style display controls on a Data Visualizer's live view: sensitivity (± per

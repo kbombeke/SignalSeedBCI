@@ -248,7 +248,8 @@ def build_parser() -> argparse.ArgumentParser:
     bb.add_argument("--fake-preset", default="biosemi32", help="Cap simulated by the fake device")
     bb.add_argument("--channels", type=int, help="Number of electrode channels to stream (e.g. 64)")
     bb.add_argument("--no-ex", action="store_true", help="Do not stream EX1-EX8")
-    bb.add_argument("--status", action="store_true", help="Add the trigger code as a 'Status' channel")
+    bb.add_argument("--status", action="store_true", help="Add the 24-bit status word (triggers in bits 0-15) as a 'Status' channel, "
+                         "as ActiView records it (for the BDFRecorder node)")
     ba = bsub.add_parser("actiview", help="ActiView TCP server")
     ba.add_argument("--host", default="127.0.0.1")
     ba.add_argument("--port", type=int, default=778)
